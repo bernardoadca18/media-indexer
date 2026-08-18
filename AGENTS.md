@@ -24,6 +24,18 @@ VisualIndex as an independent ProcessingJob aggregate. SceneSegment stores
 temporal structure and DerivedAsset owns managed representative-frame files.
 Tests use fake scene/frame tools; only smoke tests may require real FFmpeg.
 
-The next roadmap phase is searchable temporal segments plus embeddings and
-pgvector. Semantic retrieval, Gemini alignment and editorial logic are not part
-of the current implementation.
+Searchable temporal indexing is now an implemented roadmap phase. Keep
+TemporalIndex as an independent job over explicit completed Transcription and
+VisualIndex inputs. TemporalSegments must cover silence without invented text,
+retain normalized evidence links, and embed only non-empty search_text through
+the LiteLLM-compatible EmbeddingProvider. Tests use fake providers; real
+LiteLLM and pgvector checks remain explicit smokes.
+
+Candidate Retrieval is now implemented as a synchronous persisted stage over a
+completed TemporalIndex. Keep RetrievalRun strategy/configuration identity,
+traceable RetrievalCandidate scoring and normalized contributing-hit links.
+Note.raw remains immutable; chronological order is only a weak prior. Tests use
+fake embeddings and retrieval never claims a confirmed match.
+
+The next roadmap phase is provider-neutral multimodal temporal alignment where
+unmatched is valid. Gemini/multimodal calls, confirmed alignment and editorial

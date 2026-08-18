@@ -35,6 +35,23 @@ class Settings(BaseSettings):
     representative_frame_jpeg_quality: int = 85
     representative_frame_dedup_tolerance_seconds: float = 0.5
 
+    litellm_base_url: str = "http://localhost:4000"
+    litellm_api_key: str = ""
+    embedding_model: str = "mxbai-large"
+    embedding_dimensions: int = 1024
+    embedding_timeout_seconds: float = 60.0
+    embedding_batch_size: int = 32
+    temporal_target_duration_seconds: float = 30.0
+    temporal_min_duration_seconds: float = 15.0
+    temporal_max_duration_seconds: float = 60.0
+    candidate_hit_limit: int = 30
+    candidate_max_results: int = 5
+    candidate_min_semantic_score: float = 0.25
+    candidate_max_segment_gap_seconds: float = 5.0
+    candidate_context_before_seconds: float = 15.0
+    candidate_context_after_seconds: float = 20.0
+    candidate_max_duration_seconds: float = 120.0
+
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
     whisper_word_timestamps: bool = True

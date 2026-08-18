@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -209,6 +210,190 @@ class DerivedAsset(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+EMBEDDING_VECTOR_DIMENSIONS = 1024
+
+
+class TemporalIndex(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "temporal_indexes"
+    __table_args__ = (
+        UniqueConstraint(
+            "media_id", "configuration_fingerprint", name="uq_temporal_index_media_config"
+        ),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    transcription_id: Mapped[UUID] = mapped_column(
+        ForeignKey("transcriptions.id", ondelete="CASCADE")
+    )
+    visual_index_id: Mapped[UUID] = mapped_column(
+        ForeignKey("visual_indexes.id", ondelete="CASCADE")
+    )
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    embedding_provider: Mapped[str] = mapped_column(String(100))
+    embedding_model: Mapped[str] = mapped_column(String(200))
+    embedding_dimensions: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    segments: Mapped[list["TemporalSegment"]] = relationship(
+        order_by="TemporalSegment.sequence", cascade="all, delete-orphan"
+    )
+
+
+class TemporalSegment(Base, UUIDPrimaryKey):
+    __tablename__ = "temporal_segments"
+    __table_args__ = (
+        UniqueConstraint(
+            "temporal_index_id", "sequence", name="uq_temporal_segment_index_sequence"
+        ),
+        CheckConstraint("start_seconds >= 0", name="ck_temporal_segment_start_nonnegative"),
+        CheckConstraint("end_seconds > start_seconds", name="ck_temporal_segment_valid_range"),
+        CheckConstraint("duration_seconds > 0", name="ck_temporal_segment_duration_positive"),
+        Index("ix_temporal_segments_index_start", "temporal_index_id", "start_seconds"),
+    )
+    temporal_index_id: Mapped[UUID] = mapped_column(
+        ForeignKey("temporal_indexes.id", ondelete="CASCADE")
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    duration_seconds: Mapped[float] = mapped_column(Float)
+    text: Mapped[str] = mapped_column(Text)
+    search_text: Mapped[str] = mapped_column(Text)
+    segment_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_VECTOR_DIMENSIONS).with_variant(JSON(), "sqlite")
+    )
+    embedding_status: Mapped[str] = mapped_column(String(30), default="pending")
+    embedding_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    transcript_links: Mapped[list["TemporalSegmentTranscriptLink"]] = relationship(
+        cascade="all, delete-orphan"
+    )
+    scene_links: Mapped[list["TemporalSegmentSceneLink"]] = relationship(
+        cascade="all, delete-orphan"
+    )
+    frame_links: Mapped[list["TemporalSegmentFrameLink"]] = relationship(
+        cascade="all, delete-orphan"
+    )
+
+
+class TemporalSegmentTranscriptLink(Base):
+    __tablename__ = "temporal_segment_transcripts"
+    temporal_segment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("temporal_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+    transcript_segment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class TemporalSegmentSceneLink(Base):
+    __tablename__ = "temporal_segment_scenes"
+    temporal_segment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("temporal_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+    scene_segment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("scene_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class TemporalSegmentFrameLink(Base):
+    __tablename__ = "temporal_segment_frames"
+    temporal_segment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("temporal_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+    derived_asset_id: Mapped[UUID] = mapped_column(
+        ForeignKey("derived_assets.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class RetrievalRun(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "retrieval_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "temporal_index_id",
+            "configuration_fingerprint",
+            name="uq_retrieval_run_temporal_config",
+        ),
+        Index("ix_retrieval_runs_session_created", "session_id", "created_at"),
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("media_projects.id", ondelete="CASCADE")
+    )
+    session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("media_sessions.id", ondelete="CASCADE")
+    )
+    media_id: Mapped[UUID] = mapped_column(
+        ForeignKey("media_assets.id", ondelete="CASCADE")
+    )
+    temporal_index_id: Mapped[UUID] = mapped_column(
+        ForeignKey("temporal_indexes.id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(String(30))
+    strategy: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    query_text: Mapped[str | None] = mapped_column(Text)
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    candidates: Mapped[list["RetrievalCandidate"]] = relationship(
+        order_by="RetrievalCandidate.rank", cascade="all, delete-orphan"
+    )
+
+
+class RetrievalCandidate(Base, UUIDPrimaryKey):
+    __tablename__ = "retrieval_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "retrieval_run_id", "subject_key", "rank", name="uq_candidate_subject_rank"
+        ),
+        CheckConstraint("rank > 0", name="ck_retrieval_candidate_rank_positive"),
+        CheckConstraint("start_seconds >= 0", name="ck_retrieval_candidate_start_nonnegative"),
+        CheckConstraint("end_seconds > start_seconds", name="ck_retrieval_candidate_valid_range"),
+        CheckConstraint("duration_seconds > 0", name="ck_retrieval_candidate_duration_positive"),
+        Index("ix_retrieval_candidates_run_rank", "retrieval_run_id", "rank"),
+        Index("ix_retrieval_candidates_note", "note_id"),
+    )
+    retrieval_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("retrieval_runs.id", ondelete="CASCADE")
+    )
+    note_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("notes.id", ondelete="CASCADE")
+    )
+    subject_key: Mapped[str] = mapped_column(String(100))
+    rank: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    duration_seconds: Mapped[float] = mapped_column(Float)
+    score: Mapped[float] = mapped_column(Float)
+    score_components: Mapped[dict[str, Any]] = mapped_column(JSON)
+    candidate_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    temporal_segment_links: Mapped[list["RetrievalCandidateTemporalSegment"]] = relationship(
+        cascade="all, delete-orphan"
+    )
+
+
+class RetrievalCandidateTemporalSegment(Base):
+    __tablename__ = "retrieval_candidate_temporal_segments"
+    __table_args__ = (
+        CheckConstraint("hit_rank > 0", name="ck_retrieval_candidate_hit_rank_positive"),
+        Index("ix_retrieval_candidate_segments_temporal", "temporal_segment_id"),
+    )
+    retrieval_candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("retrieval_candidates.id", ondelete="CASCADE"), primary_key=True
+    )
+    temporal_segment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("temporal_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+    similarity_score: Mapped[float] = mapped_column(Float)
+    hit_rank: Mapped[int] = mapped_column(Integer)
+
+
 class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
     __table_args__ = (Index("ix_processing_jobs_status_created", "status", "created_at"),)
@@ -220,6 +405,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     )
     visual_index_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
+    )
+    temporal_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("temporal_indexes.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")

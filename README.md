@@ -1,11 +1,9 @@
 # Media Indexer
-Also owns durable timestamped ASR and deterministic visual indexing as
-independent processing stages.
-
 
 Camada de entendimento e memória audiovisual do NeoVids. Registra projetos e
 sessões, preserva notas brutas, armazena mídias por identidade lógica e extrai
-metadata técnica com ffprobe em um job assíncrono.
+metadata técnica, ASR, índice visual e segmentos temporais pesquisáveis em jobs
+assíncronos independentes.
 
 ## Quick start
 
@@ -96,6 +94,112 @@ Visual settings:
     REPRESENTATIVE_FRAME_JPEG_QUALITY=85
     REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS=0.5
 
+## Searchable temporal index
+
+A TemporalIndex requires explicit completed transcription_id and visual_index_id:
+
+    curl -X POST "http://localhost:8012/sessions/$SESSION_ID/temporal-indexes" \
+      -H 'Content-Type: application/json' \
+      -d '{"transcription_id":"...","visual_index_id":"..."}'
+
+The HTTP 202 response contains the TemporalIndex and its independent
+ProcessingJob. Query the lightweight aggregate and paginated retrieval units:
+
+    GET /sessions/{session_id}/temporal-indexes
+    GET /temporal-indexes/{temporal_index_id}
+    GET /temporal-indexes/{temporal_index_id}/segments?offset=0&limit=100
+    POST /temporal-indexes/{temporal_index_id}/search
+
+TemporalSegments cover the entire media duration, including silent intervals.
+Natural transcript ends are preferred as chunk boundaries, then scene ends,
+then the configured target duration. Text is deterministic ASR concatenation;
+silent chunks retain empty text and no embedding. Normalized link tables retain
+the contributing transcript segments, scenes and representative frames.
+Intervals use [start,end), except that a point exactly at media end belongs to
+the final segment.
+
+Non-empty search_text values are embedded in batches through the
+OpenAI-compatible LiteLLM /v1/embeddings endpoint. The media-indexer only knows
+the configured LiteLLM alias. Vectors are stored as pgvector vector(1024);
+EMBEDDING_DIMENSIONS is validated against the schema and a dimension change
+requires a migration. Search uses exact cosine distance scoped to one
+TemporalIndex and returns score = 1 - cosine_distance, so larger is more
+similar. No HNSW/IVFFlat index is created at the current expected scale.
+
+    LITELLM_BASE_URL=http://host.docker.internal:4000
+    LITELLM_API_KEY=
+    EMBEDDING_MODEL=mxbai-large
+    EMBEDDING_DIMENSIONS=1024
+    EMBEDDING_TIMEOUT_SECONDS=60
+    EMBEDDING_BATCH_SIZE=32
+    TEMPORAL_TARGET_DURATION_SECONDS=30
+    TEMPORAL_MIN_DURATION_SECONDS=15
+    TEMPORAL_MAX_DURATION_SECONDS=60
+
+Docker Compose uses pgvector/pgvector:pg16, preserving PostgreSQL major 16 and
+the existing named data volume. Migration 0004 enables the extension
+automatically. The API service maps host.docker.internal to host-gateway so its
+default LiteLLM URL also resolves on Linux Docker; override LITELLM_BASE_URL
+when the proxy is on another network.
+
+Equivalent prerequisite/configuration/model requests reuse one TemporalIndex
+and job. A retry removes and rebuilds only that index's TemporalSegments,
+including evidence links and vectors. Transcription and VisualIndex remain
+untouched, and failure cannot demote a ready MediaSession.
+
+## Candidate retrieval
+
+Candidate Retrieval is synchronous because one batched query embedding, exact
+vector searches and deterministic grouping are expected to be request-sized
+work. Results are still persisted as RetrievalRun and RetrievalCandidate
+aggregates for the next multimodal stage.
+
+Technical query retrieval:
+
+    POST /temporal-indexes/{temporal_index_id}/candidates
+
+Note retrieval, for one note or all/selected notes in the index session:
+
+    POST /temporal-indexes/{temporal_index_id}/notes/{note_id}/candidates
+    POST /temporal-indexes/{temporal_index_id}/note-retrievals
+
+Inspect persisted provenance:
+
+    GET /retrieval-runs/{retrieval_run_id}
+    GET /retrieval-runs/{retrieval_run_id}/candidates
+    GET /retrieval-candidates/{candidate_id}/evidence
+
+The semantic_temporal_v1 strategy fetches up to 30 exact-cosine hits by
+default, removes hits below the semantic threshold, and merges temporally
+adjacent hits while the expanded cluster remains within 120 seconds. Each
+cluster receives 15 seconds before and 20 seconds after, clamped to the media
+duration. A cluster that would exceed the maximum is split greedily; the
+single-hit fallback centers the maximum window on its strongest hit.
+
+Query score is 0.60*semantic_mean + 0.30*semantic_max + 0.10*density. Note
+score uses 0.55*mean + 0.30*max + 0.10*density + 0.05*chronological_prior.
+The prior compares normalized Note.order with the cluster midpoint and is only
+a weak bonus. All components and individual contributing-hit similarities are
+persisted. Silent segments can enter the expanded evidence window but are never
+given invented embeddings.
+
+Equivalent index, subject set, strategy and configuration reuse the same run.
+The evidence endpoint returns the immutable raw Note, contributing hits,
+overlapping TemporalSegments/transcript/scenes and frame storage URIs, never
+image bytes. A completed TemporalIndex is required; Candidate Retrieval never
+changes MediaSession status and does not claim an alignment.
+
+Operational defaults:
+
+    CANDIDATE_HIT_LIMIT=30
+    CANDIDATE_MAX_RESULTS=5
+    CANDIDATE_MIN_SEMANTIC_SCORE=0.25
+    CANDIDATE_MAX_SEGMENT_GAP_SECONDS=5
+    CANDIDATE_CONTEXT_BEFORE_SECONDS=15
+    CANDIDATE_CONTEXT_AFTER_SECONDS=20
+    CANDIDATE_MAX_DURATION_SECONDS=120
+
+
 ## Long-running jobs
 
 Processing jobs record heartbeat_at, attempt_count and max_attempts. On startup,
@@ -131,3 +235,38 @@ wait for initial_index, then POST a visual index with scene_threshold=8 and a
 two-second periodic interval. Poll its job and inspect the scene/frame endpoints.
 Verify each local:// URI under STORAGE_ROOT with sha256sum and ffprobe. No media
 fixture is committed and this smoke is intentionally outside normal pytest.
+
+## Embedding and pgvector smokes
+
+After the stack is migrated, run from backend:
+
+    python scripts/smoke_pgvector.py
+    python scripts/smoke_temporal_index.py
+
+The first verifies the vector extension and exact cosine ordering. The second
+builds a small TemporalIndex with a deterministic fake provider, persists
+vector(1024) values and searches them through the production repository.
+
+To exercise the real LiteLLM alias without hardcoded credentials:
+
+    LITELLM_BASE_URL=... LITELLM_API_KEY=... \
+      python scripts/smoke_embedding.py --text "Geralt learns Aard"
+
+
+## Candidate Retrieval smokes
+
+The deterministic temporal smoke also performs arbitrary-query and note
+Candidate Retrieval, checks ordering/window coverage, and verifies idempotent
+run reuse through the production PostgreSQL repositories:
+
+    python scripts/smoke_temporal_index.py
+
+To evaluate one real gameplay note against an existing completed index:
+
+    python scripts/retrieve_note_candidates.py \
+      --temporal-index-id UUID --note-id UUID
+
+The command prints ranked HH:MM:SS windows and scores. Real embedding commands
+keep normal LiteLLM authentication; the current environment's prior 401 means a
+valid LITELLM_API_KEY is required for real evaluation. Tests and the
+deterministic smoke use a fake EmbeddingProvider and require no credentials.

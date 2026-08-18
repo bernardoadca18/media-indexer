@@ -6,7 +6,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.dependencies import DB
-from app.api.routers import jobs, projects, sessions, transcriptions, visual_indexes
+from app.api.routers import (
+    candidate_retrieval,
+    jobs,
+    projects,
+    sessions,
+    temporal_indexes,
+    transcriptions,
+    visual_indexes,
+)
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.workers.runner import job_runner
@@ -36,6 +44,8 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(transcriptions.router)
     application.include_router(sessions.router)
     application.include_router(visual_indexes.router)
+    application.include_router(temporal_indexes.router)
+    application.include_router(candidate_retrieval.router)
     application.include_router(jobs.router)
 
     @application.get("/health", tags=["health"])

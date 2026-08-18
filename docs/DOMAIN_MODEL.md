@@ -53,3 +53,59 @@ Scene and frame collections are paginated and absent from SessionOut. Images
 remain files outside PostgreSQL. representative_frame metadata records
 periodic/scene origins and related scene sequence numbers. VisualIndex owns its
 pending/processing/completed/failed state and cannot demote a ready MediaSession.
+
+## Temporal index and searchable segments
+
+- TemporalIndex represents one deterministic temporal build over an explicit
+  completed Transcription and VisualIndex. It records lifecycle, provenance,
+  embedding provider/model/dimensions and the canonical configuration
+  fingerprint.
+- TemporalSegment is the ordered retrieval unit. It records a positive temporal
+  range, deterministic ASR text/search_text, metadata, embedding lifecycle and
+  an optional vector(1024).
+- TemporalSegmentTranscriptLink, TemporalSegmentSceneLink and
+  TemporalSegmentFrameLink are normalized many-to-many evidence associations.
+  They answer which original transcript segments, scenes and representative
+  frames contributed to a retrieval unit without treating JSON as relational
+  identity.
+- ProcessingJob may point explicitly to TemporalIndex. This remains clearer for
+  the current small set of concrete targets than a speculative generic target.
+
+TemporalIndex identity includes media, both prerequisite IDs, segmentation
+durations, interval/text ownership rules, embedding provider/model/dimensions
+and similarity metric. Equivalent requests reuse the aggregate and job;
+materially different configurations coexist.
+
+The timeline is fully covered even when no speech exists. A silent
+TemporalSegment has text/search_text empty, embedding NULL and
+embedding_status=not_applicable. It is valid evidence for future temporal or
+multimodal expansion, but does not participate in textual vector similarity.
+
+Text embeddings live directly on TemporalSegment because their immutable
+provider/model/dimension provenance belongs to TemporalIndex. They are derived
+and replaceable: retry deletes and recreates segments, associations and vectors.
+The API never returns vector arrays. Primitive search is scoped to one completed
+TemporalIndex and returns exact cosine similarity with higher scores better.
+
+## Candidate retrieval
+
+- RetrievalRun is one persisted query or note-batch retrieval over a completed
+  TemporalIndex. It records subject/configuration identity, explicit
+  semantic_temporal_v1 strategy and pending/processing/completed/failed state.
+- RetrievalCandidate is a ranked, positive-duration candidate window for one
+  query subject or optional Note. It stores the traceable composite score,
+  components and context-expansion metadata.
+- RetrievalCandidateTemporalSegment links a candidate to each semantic hit and
+  stores that hit's exact cosine score and retrieval rank.
+
+The run fingerprint includes TemporalIndex, normalized arbitrary query or
+ordered Note IDs, all retrieval parameters, strategy version and scoring
+formula. Equivalent operations reuse one run; different parameters coexist.
+Candidate ranks are unique per run subject.
+
+Candidates are hypotheses, not matches. Their [start,end) windows may include
+silent TemporalSegments, transcripts, scenes and representative frames reached
+through temporal overlap. Only contributing vector hits are normalized as
+candidate provenance. The evidence service exposes both sets and preserves
+Note.raw unchanged; frames are references by storage_uri, never database blobs
+or base64.

@@ -63,6 +63,7 @@ class SessionOut(SessionSummary):
 
 class JobOut(ORMModel):
     id: UUID
+    temporal_index_id: UUID | None
     project_id: UUID
     session_id: UUID
     media_id: UUID

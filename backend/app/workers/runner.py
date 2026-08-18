@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.services.embedding_provider import LiteLLMEmbeddingProvider
 from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import FFprobe
 from app.services.processing import InitialIndexProcessor
 from app.services.storage import LocalStorage
+from app.services.temporal_index import TemporalIndexProcessor
 from app.services.transcription import TranscriptionProcessor
 from app.services.transcription_provider import FasterWhisperProvider
 from app.services.visual_index import VisualIndexProcessor
@@ -21,12 +23,17 @@ logger = structlog.get_logger(__name__)
 
 def build_default_registry() -> ProcessorRegistry:
     storage = LocalStorage(settings.storage_root)
-    provider = FasterWhisperProvider(
+    transcription_provider = FasterWhisperProvider(
         device=settings.whisper_device,
         compute_type=settings.whisper_compute_type,
     )
     scene_detector = FFmpegSceneDetector(settings.ffmpeg_binary)
     frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
+    embedding_provider = LiteLLMEmbeddingProvider(
+        settings.litellm_base_url,
+        settings.litellm_api_key,
+        settings.embedding_timeout_seconds,
+    )
     registry = ProcessorRegistry()
     registry.register(
         "initial_index",
@@ -37,7 +44,7 @@ def build_default_registry() -> ProcessorRegistry:
         lambda db: TranscriptionProcessor(
             db,
             storage,
-            provider,
+            transcription_provider,
             settings.transcription_batch_size,
         ),
     )
@@ -49,6 +56,14 @@ def build_default_registry() -> ProcessorRegistry:
             scene_detector,
             frame_extractor,
             settings.visual_index_batch_size,
+        ),
+    )
+    registry.register(
+        "temporal_index",
+        lambda db: TemporalIndexProcessor(
+            db,
+            embedding_provider,
+            settings.embedding_batch_size,
         ),
     )
     return registry

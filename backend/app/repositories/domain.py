@@ -103,6 +103,15 @@ class JobRepository:
         )
         return result.scalar_one_or_none()
 
+    async def for_temporal_index(self, temporal_index_id: UUID) -> ProcessingJob | None:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(ProcessingJob.temporal_index_id == temporal_index_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def recoverable(self, stale_before: datetime) -> Sequence[ProcessingJob]:
         result = await self.db.execute(
             select(ProcessingJob)

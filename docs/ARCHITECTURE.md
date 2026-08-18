@@ -10,7 +10,7 @@ consumers from depending on paths. Full notes and parsed units are immutable,
 reinforced by database triggers. SHA-256 supports future deduplication.
 
 Known limits: local storage and one API replica; no quotas, auth, remote storage,
-or distributed leases. pgvector waits until embeddings actually exist.
+or distributed leases. Vector search uses PostgreSQL with the pgvector extension.
 
 ## Job execution and recovery
 
@@ -87,3 +87,77 @@ Migration 0003 also replaces the shared raw-note immutability function with
 JSON field access. PostgreSQL resolves record fields before the table-name
 branch, so the previous NEW.raw/NEW.raw_notes implementation blocked ordinary
 MediaSession status updates. Raw note values remain immutable.
+
+## Searchable temporal index and embeddings
+
+POST /sessions/{id}/temporal-indexes explicitly selects one completed
+Transcription and one completed VisualIndex. TemporalIndex stores this
+provenance plus the canonical segmentation and embedding configuration. Its
+identity is media_id plus the full configuration fingerprint; ProcessingJob
+keeps an explicit temporal_index_id rather than introducing a generic target
+abstraction.
+
+The deterministic builder covers [0, media_duration]. It prefers transcript end
+boundaries within min/max duration, then scene ends, then the target duration.
+Transcript text is assigned by transcript start so a fallback boundary cannot
+duplicate text, while overlap associations still retain all evidence.
+TemporalSegmentTranscriptLink, TemporalSegmentSceneLink and
+TemporalSegmentFrameLink make provenance queryable without parsing JSON.
+Representative-frame membership is [start,end); the last segment explicitly
+owns points at the exact media end. Silent segments keep empty text and
+embedding_status=not_applicable.
+
+EmbeddingProvider is intentionally embedding-specific. The production adapter
+sends arrays of non-empty search_text values to LiteLLM's OpenAI-compatible
+/v1/embeddings endpoint. Provider responses are reordered by input index and
+validated for count, finite values and exactly 1024 dimensions before
+persistence. The configured dimension is also checked against the schema
+constant; changing it requires a migration.
+
+Migration 0004 enables pgvector and stores embeddings directly on
+TemporalSegment because provider/model/dimension are immutable provenance on
+the owning TemporalIndex. Exact cosine search is scoped by temporal_index_id and
+returns 1 - cosine distance, so higher scores are better. No approximate index
+is created yet: exact search has perfect recall and is adequate for the
+expected initial thousands to tens of thousands of segments.
+
+Processing persists segment rows and evidence links first, then embeddings in
+configured batches with heartbeat/progress updates. completed is set only after
+all applicable vectors are stored. Retry explicitly deletes evidence links and
+TemporalSegments, then rebuilds them; it never deletes the source
+Transcription or VisualIndex. A temporal failure leaves MediaSession ready.
+
+
+## Candidate Retrieval
+
+Candidate Retrieval is a synchronous application service, not a ProcessingJob:
+it batches query embeddings, delegates exact cosine search to the existing
+TemporalSearchService, groups hits and persists the result within the request.
+This keeps durable provenance without queueing short work. RetrievalRun owns
+kind (query or notes), semantic_temporal_v1 strategy, canonical configuration
+and lifecycle. The unique TemporalIndex/fingerprint boundary makes equivalent
+runs reusable and a changed subject set or parameter produces a new run.
+
+Hits below the configured threshold are discarded. Remaining unique hits are
+sorted by time and greedily grouped when their gap is within the configured
+limit and the context-expanded cluster fits the maximum duration. Expansion is
+clamped to [0, media_duration]. Oversized groups split before a hit is lost; the
+single-cluster fallback centers the maximum window on its strongest hit.
+
+RetrievalCandidate persists rank, [start,end), composite score, score
+components and expansion metadata. RetrievalCandidateTemporalSegment is the
+normalized provenance edge and retains each contributing similarity plus its
+original hit rank. Evidence assembly separately loads all TemporalSegments,
+transcript segments, scenes and representative frames overlapping the expanded
+window, so silent neighbors are visible without becoming semantic hits.
+
+Semantic relevance is primary. Query weights are mean .60, peak .30 and hit
+density .10. Note weights are mean .55, peak .30, density .10 and chronological
+prior .05. The prior compares Note.order position with candidate midpoint and
+is never a hard ordering constraint. Note.raw is only whitespace-normalized in
+memory for embedding and remains immutable in storage.
+
+Migration 0005 adds the retrieval aggregate and provenance edge. Candidate
+retrieval requires a completed TemporalIndex and uses that index's configured
+EmbeddingProvider/model/dimensions. It does not call a chat or multimodal model,
+does not confirm alignment and cannot demote MediaSession.
