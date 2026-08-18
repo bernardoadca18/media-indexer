@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     whisper_device: str = "auto"
     whisper_compute_type: str = "auto"
     whisper_language: str = ""
+    ffmpeg_binary: str = "ffmpeg"
+    visual_index_batch_size: int = 25
+    scene_detection_enabled: bool = True
+    scene_detector: str = "ffmpeg_scdet"
+    scene_threshold: float = 10.0
+    representative_frame_interval_seconds: float = 10.0
+    representative_frame_width: int = 640
+    representative_frame_format: str = "jpeg"
+    representative_frame_jpeg_quality: int = 85
+    representative_frame_dedup_tolerance_seconds: float = 0.5
+
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
     whisper_word_timestamps: bool = True

@@ -19,6 +19,11 @@ Keep it as an independent ProcessingJob and Transcription aggregate; do not fold
 it into InitialIndexProcessor. Transcription failures must not invalidate a
 ready MediaSession. Tests use fake providers and must never download a model.
 
-The next roadmap phase may add scene-derived assets, but scene detection,
-embeddings, pgvector, semantic retrieval, Gemini alignment and editorial logic
-are not part of the current implementation.
+Deterministic visual indexing is now an active implemented roadmap phase. Keep
+VisualIndex as an independent ProcessingJob aggregate. SceneSegment stores
+temporal structure and DerivedAsset owns managed representative-frame files.
+Tests use fake scene/frame tools; only smoke tests may require real FFmpeg.
+
+The next roadmap phase is searchable temporal segments plus embeddings and
+pgvector. Semantic retrieval, Gemini alignment and editorial logic are not part
+of the current implementation.

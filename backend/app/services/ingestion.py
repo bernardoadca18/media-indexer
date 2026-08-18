@@ -81,6 +81,9 @@ class IngestionService:
                 status="pending",
             )
             self.db.add_all([media, session])
+            # Establish FK targets before adding notes/jobs that only carry IDs.
+            # This also gives PostgreSQL deterministic flush ordering.
+            await self.db.flush()
             for order, raw in enumerate(split_note_units(raw_notes), start=1):
                 self.db.add(Note(session_id=session_id, order=order, raw=raw))
             job = ProcessingJob(

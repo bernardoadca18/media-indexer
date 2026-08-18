@@ -13,6 +13,8 @@ from app.services.processing import InitialIndexProcessor
 from app.services.storage import LocalStorage
 from app.services.transcription import TranscriptionProcessor
 from app.services.transcription_provider import FasterWhisperProvider
+from app.services.visual_index import VisualIndexProcessor
+from app.services.visual_tools import FFmpegFrameExtractor, FFmpegSceneDetector
 
 logger = structlog.get_logger(__name__)
 
@@ -23,6 +25,8 @@ def build_default_registry() -> ProcessorRegistry:
         device=settings.whisper_device,
         compute_type=settings.whisper_compute_type,
     )
+    scene_detector = FFmpegSceneDetector(settings.ffmpeg_binary)
+    frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
     registry = ProcessorRegistry()
     registry.register(
         "initial_index",
@@ -35,6 +39,16 @@ def build_default_registry() -> ProcessorRegistry:
             storage,
             provider,
             settings.transcription_batch_size,
+        ),
+    )
+    registry.register(
+        "visual_index",
+        lambda db: VisualIndexProcessor(
+            db,
+            storage,
+            scene_detector,
+            frame_extractor,
+            settings.visual_index_batch_size,
         ),
     )
     return registry

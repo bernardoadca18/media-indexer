@@ -6,7 +6,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaSession, ProcessingJob, Transcription
+from app.models import MediaSession, ProcessingJob, Transcription, VisualIndex
 from app.repositories.domain import JobRepository
 
 logger = structlog.get_logger(__name__)
@@ -115,6 +115,11 @@ class JobExecutor:
                     if transcription is not None:
                         transcription.status = "pending"
                         transcription.completed_at = None
+                elif job.visual_index_id is not None:
+                    visual_index = await self.db.get(VisualIndex, job.visual_index_id)
+                    if visual_index is not None:
+                        visual_index.status = "pending"
+                        visual_index.completed_at = None
             recovered.append(job.id)
         await self.db.commit()
         return recovered
@@ -130,6 +135,11 @@ class JobExecutor:
             if transcription is not None:
                 transcription.status = "failed"
                 transcription.completed_at = datetime.now(UTC)
+        elif job.visual_index_id is not None:
+            visual_index = await self.db.get(VisualIndex, job.visual_index_id)
+            if visual_index is not None:
+                visual_index.status = "failed"
+                visual_index.completed_at = datetime.now(UTC)
         elif job.job_type == "initial_index":
             session = await self.db.get(MediaSession, job.session_id)
             if session is not None:

@@ -45,6 +45,7 @@ backend/
     versions/
       0001_initial.py
       0002_transcriptions.py
+      0003_visual_indexes.py
     env.py
   app/
     api/
@@ -54,6 +55,7 @@ backend/
         projects.py
         sessions.py
         transcriptions.py
+        visual_indexes.py
       __init__.py
       dependencies.py
     core/
@@ -69,10 +71,12 @@ backend/
       __init__.py
       domain.py
       transcription.py
+      visual_index.py
     schemas/
       __init__.py
       domain.py
       transcription.py
+      visual_index.py
     services/
       __init__.py
       ingestion.py
@@ -83,6 +87,8 @@ backend/
       storage.py
       transcription_provider.py
       transcription.py
+      visual_index.py
+      visual_tools.py
     workers/
       __init__.py
       runner.py
@@ -91,6 +97,7 @@ backend/
   tests/
     conftest.py
     test_api.py
+    test_derived_storage.py
     test_jobs.py
     test_note_parser.py
     test_probe.py
@@ -98,6 +105,9 @@ backend/
     test_storage.py
     test_transcription_api.py
     test_transcription.py
+    test_visual_index_api.py
+    test_visual_index.py
+    test_visual_tools.py
   alembic.ini
   Dockerfile
   pyproject.toml
@@ -118,6 +128,1736 @@ README.md
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="backend/alembic/versions/0003_visual_indexes.py">
+"""Add deterministic visual indexes and managed derived assets."""
+
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+from alembic import op
+
+revision = "0003_visual_indexes"
+down_revision = "0002_transcriptions"
+branch_labels = None
+depends_on = None
+IMMUTABLE_RAW_FUNCTION = """
+CREATE OR REPLACE FUNCTION immutable_raw() RETURNS trigger AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'notes'
+     AND to_jsonb(NEW)->'raw' IS DISTINCT FROM to_jsonb(OLD)->'raw'
+  THEN
+    RAISE EXCEPTION 'raw is immutable';
+  END IF;
+  IF TG_TABLE_NAME = 'media_sessions'
+     AND to_jsonb(NEW)->'raw_notes' IS DISTINCT FROM to_jsonb(OLD)->'raw_notes'
+  THEN
+    RAISE EXCEPTION 'raw_notes is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+LEGACY_IMMUTABLE_RAW_FUNCTION = """
+CREATE OR REPLACE FUNCTION immutable_raw() RETURNS trigger AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'notes' AND NEW.raw IS DISTINCT FROM OLD.raw
+  THEN RAISE EXCEPTION 'raw is immutable'; END IF;
+  IF TG_TABLE_NAME = 'media_sessions'
+     AND NEW.raw_notes IS DISTINCT FROM OLD.raw_notes
+  THEN RAISE EXCEPTION 'raw_notes is immutable'; END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+
+def upgrade() -> None:
+    uuid = postgresql.UUID(as_uuid=True)
+    op.execute(IMMUTABLE_RAW_FUNCTION)
+    op.create_table(
+        "visual_indexes",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column(
+            "project_id",
+            uuid,
+            sa.ForeignKey("media_projects.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "session_id",
+            uuid,
+            sa.ForeignKey("media_sessions.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "media_id",
+            uuid,
+            sa.ForeignKey("media_assets.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("detector", sa.String(100), nullable=False),
+        sa.Column("configuration", postgresql.JSONB, nullable=False),
+        sa.Column("configuration_fingerprint", sa.String(64), nullable=False),
+        sa.Column("tool_metadata", postgresql.JSONB),
+        sa.Column("started_at", sa.DateTime(timezone=True)),
+        sa.Column("completed_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.UniqueConstraint(
+            "media_id",
+            "configuration_fingerprint",
+            name="uq_visual_index_media_config",
+        ),
+    )
+    op.create_table(
+        "scene_segments",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column(
+            "visual_index_id",
+            uuid,
+            sa.ForeignKey("visual_indexes.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("sequence", sa.Integer, nullable=False),
+        sa.Column("start_seconds", sa.Float, nullable=False),
+        sa.Column("end_seconds", sa.Float, nullable=False),
+        sa.Column("duration_seconds", sa.Float, nullable=False),
+        sa.Column("detector_score", sa.Float),
+        sa.Column("metadata", postgresql.JSONB),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.UniqueConstraint("visual_index_id", "sequence", name="uq_scene_visual_index_sequence"),
+        sa.CheckConstraint("start_seconds >= 0", name="ck_scene_start_nonnegative"),
+        sa.CheckConstraint("end_seconds >= start_seconds", name="ck_scene_valid_range"),
+        sa.CheckConstraint("duration_seconds >= 0", name="ck_scene_duration_nonnegative"),
+    )
+    op.create_index(
+        "ix_scene_segments_visual_start",
+        "scene_segments",
+        ["visual_index_id", "start_seconds"],
+    )
+    op.create_table(
+        "derived_assets",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column(
+            "project_id",
+            uuid,
+            sa.ForeignKey("media_projects.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "session_id",
+            uuid,
+            sa.ForeignKey("media_sessions.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "media_id",
+            uuid,
+            sa.ForeignKey("media_assets.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "visual_index_id",
+            uuid,
+            sa.ForeignKey("visual_indexes.id", ondelete="CASCADE"),
+        ),
+        sa.Column("kind", sa.String(100), nullable=False),
+        sa.Column("storage_uri", sa.String(1000), nullable=False, unique=True),
+        sa.Column("mime_type", sa.String(200), nullable=False),
+        sa.Column("byte_size", sa.BigInteger, nullable=False),
+        sa.Column("sha256", sa.String(64), nullable=False),
+        sa.Column("width", sa.Integer),
+        sa.Column("height", sa.Integer),
+        sa.Column("timestamp_seconds", sa.Float),
+        sa.Column("source_start_seconds", sa.Float),
+        sa.Column("source_end_seconds", sa.Float),
+        sa.Column("metadata", postgresql.JSONB),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(
+            "timestamp_seconds IS NULL OR timestamp_seconds >= 0",
+            name="ck_derived_timestamp_nonnegative",
+        ),
+        sa.CheckConstraint(
+            "source_start_seconds IS NULL OR source_start_seconds >= 0",
+            name="ck_derived_source_start_nonnegative",
+        ),
+        sa.CheckConstraint(
+            "source_end_seconds IS NULL OR source_start_seconds IS NULL "
+            "OR source_end_seconds >= source_start_seconds",
+            name="ck_derived_source_valid_range",
+        ),
+    )
+    op.create_index(
+        "ix_derived_assets_visual_timestamp",
+        "derived_assets",
+        ["visual_index_id", "timestamp_seconds"],
+    )
+    op.add_column("processing_jobs", sa.Column("visual_index_id", uuid))
+    op.create_foreign_key(
+        "fk_processing_jobs_visual_index",
+        "processing_jobs",
+        "visual_indexes",
+        ["visual_index_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+
+
+def downgrade() -> None:
+    op.drop_constraint(
+        "fk_processing_jobs_visual_index",
+        "processing_jobs",
+        type_="foreignkey",
+    )
+    op.drop_column("processing_jobs", "visual_index_id")
+    op.drop_index("ix_derived_assets_visual_timestamp", table_name="derived_assets")
+    op.drop_table("derived_assets")
+    op.drop_index("ix_scene_segments_visual_start", table_name="scene_segments")
+    op.drop_table("scene_segments")
+    op.drop_table("visual_indexes")
+    op.execute(LEGACY_IMMUTABLE_RAW_FUNCTION)
+</file>
+
+<file path="backend/app/api/routers/visual_indexes.py">
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.api.dependencies import DB
+from app.core.config import settings
+from app.models import MediaSession
+from app.repositories.visual_index import VisualIndexRepository
+from app.schemas.visual_index import (
+    DerivedAssetPage,
+    SceneSegmentPage,
+    VisualIndexCreate,
+    VisualIndexJobOut,
+    VisualIndexOut,
+)
+from app.services.visual_index import (
+    MediaDurationUnavailableError,
+    VisualIndexAttemptsExhaustedError,
+    VisualIndexRequest,
+    VisualIndexService,
+    VisualSessionNotReadyError,
+)
+from app.workers.runner import job_runner
+
+router = APIRouter(tags=["visual-indexes"])
+
+
+@router.post(
+    "/sessions/{session_id}/visual-indexes",
+    response_model=VisualIndexJobOut,
+    status_code=202,
+)
+async def create_visual_index(
+    session_id: UUID, payload: VisualIndexCreate, db: DB
+) -> VisualIndexJobOut:
+    request = VisualIndexRequest(
+        scene_detection_enabled=(
+            settings.scene_detection_enabled
+            if payload.scene_detection_enabled is None
+            else payload.scene_detection_enabled
+        ),
+        scene_detector=payload.scene_detector or settings.scene_detector,
+        scene_threshold=(
+            settings.scene_threshold if payload.scene_threshold is None else payload.scene_threshold
+        ),
+        periodic_frame_interval_seconds=(
+            settings.representative_frame_interval_seconds
+            if payload.periodic_frame_interval_seconds is None
+            else payload.periodic_frame_interval_seconds
+        ),
+        frame_width=payload.frame_width or settings.representative_frame_width,
+        image_format=payload.image_format or settings.representative_frame_format,
+        jpeg_quality=(
+            settings.representative_frame_jpeg_quality
+            if payload.jpeg_quality is None
+            else payload.jpeg_quality
+        ),
+        dedup_tolerance_seconds=(
+            settings.representative_frame_dedup_tolerance_seconds
+            if payload.dedup_tolerance_seconds is None
+            else payload.dedup_tolerance_seconds
+        ),
+    )
+    try:
+        result = await VisualIndexService(db, settings.job_max_attempts).ensure(session_id, request)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (
+        VisualSessionNotReadyError,
+        MediaDurationUnavailableError,
+        VisualIndexAttemptsExhaustedError,
+    ) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result.enqueue:
+        job_runner.enqueue(result.job.id)
+    return VisualIndexJobOut(
+        visual_index=result.visual_index,
+        job=result.job,
+        created=result.created,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/visual-indexes",
+    response_model=list[VisualIndexOut],
+)
+async def list_visual_indexes(session_id: UUID, db: DB) -> object:
+    if await db.get(MediaSession, session_id) is None:
+        raise HTTPException(404, "session not found")
+    return await VisualIndexRepository(db).list_for_session(session_id)
+
+
+@router.get("/visual-indexes/{visual_index_id}", response_model=VisualIndexOut)
+async def get_visual_index(visual_index_id: UUID, db: DB) -> object:
+    item = await VisualIndexRepository(db).get(visual_index_id)
+    if item is None:
+        raise HTTPException(404, "visual index not found")
+    return item
+
+
+@router.get(
+    "/visual-indexes/{visual_index_id}/scenes",
+    response_model=SceneSegmentPage,
+)
+async def list_scenes(
+    visual_index_id: UUID,
+    db: DB,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> SceneSegmentPage:
+    repository = VisualIndexRepository(db)
+    if await repository.get(visual_index_id) is None:
+        raise HTTPException(404, "visual index not found")
+    items, total = await repository.scenes(visual_index_id, offset, limit)
+    return SceneSegmentPage(items=list(items), total=total, offset=offset, limit=limit)
+
+
+@router.get(
+    "/visual-indexes/{visual_index_id}/frames",
+    response_model=DerivedAssetPage,
+)
+async def list_frames(
+    visual_index_id: UUID,
+    db: DB,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> DerivedAssetPage:
+    repository = VisualIndexRepository(db)
+    if await repository.get(visual_index_id) is None:
+        raise HTTPException(404, "visual index not found")
+    items, total = await repository.frames(visual_index_id, offset, limit)
+    return DerivedAssetPage(items=list(items), total=total, offset=offset, limit=limit)
+</file>
+
+<file path="backend/app/repositories/visual_index.py">
+from collections.abc import Sequence
+from uuid import UUID
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import DerivedAsset, SceneSegment, VisualIndex
+
+
+class VisualIndexRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def get(self, visual_index_id: UUID) -> VisualIndex | None:
+        return await self.db.get(VisualIndex, visual_index_id)
+
+    async def by_fingerprint(self, media_id: UUID, fingerprint: str) -> VisualIndex | None:
+        result = await self.db.execute(
+            select(VisualIndex).where(
+                VisualIndex.media_id == media_id,
+                VisualIndex.configuration_fingerprint == fingerprint,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_for_session(self, session_id: UUID) -> Sequence[VisualIndex]:
+        result = await self.db.execute(
+            select(VisualIndex)
+            .where(VisualIndex.session_id == session_id)
+            .order_by(VisualIndex.created_at.desc())
+        )
+        return result.scalars().all()
+
+    async def scenes(
+        self, visual_index_id: UUID, offset: int, limit: int
+    ) -> tuple[Sequence[SceneSegment], int]:
+        total = await self.db.scalar(
+            select(func.count(SceneSegment.id)).where(
+                SceneSegment.visual_index_id == visual_index_id
+            )
+        )
+        result = await self.db.execute(
+            select(SceneSegment)
+            .where(SceneSegment.visual_index_id == visual_index_id)
+            .order_by(SceneSegment.sequence)
+            .offset(offset)
+            .limit(limit)
+        )
+        return result.scalars().all(), int(total or 0)
+
+    async def frames(
+        self, visual_index_id: UUID, offset: int, limit: int
+    ) -> tuple[Sequence[DerivedAsset], int]:
+        condition = (DerivedAsset.visual_index_id == visual_index_id) & (
+            DerivedAsset.kind == "representative_frame"
+        )
+        total = await self.db.scalar(select(func.count(DerivedAsset.id)).where(condition))
+        result = await self.db.execute(
+            select(DerivedAsset)
+            .where(condition)
+            .order_by(DerivedAsset.timestamp_seconds, DerivedAsset.created_at)
+            .offset(offset)
+            .limit(limit)
+        )
+        return result.scalars().all(), int(total or 0)
+
+    async def clear_outputs(self, visual_index_id: UUID) -> None:
+        await self.db.execute(
+            delete(DerivedAsset).where(DerivedAsset.visual_index_id == visual_index_id)
+        )
+        await self.db.execute(
+            delete(SceneSegment).where(SceneSegment.visual_index_id == visual_index_id)
+        )
+</file>
+
+<file path="backend/app/schemas/visual_index.py">
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+from app.schemas.domain import JobOut, ORMModel
+
+
+class VisualIndexCreate(BaseModel):
+    scene_detection_enabled: bool | None = None
+    scene_detector: Literal["ffmpeg_scdet"] | None = None
+    scene_threshold: float | None = Field(default=None, ge=0, le=100)
+    periodic_frame_interval_seconds: float | None = Field(default=None, gt=0)
+    frame_width: int | None = Field(default=None, ge=64, le=4096)
+    image_format: Literal["jpeg"] | None = None
+    jpeg_quality: int | None = Field(default=None, ge=1, le=100)
+    dedup_tolerance_seconds: float | None = Field(default=None, ge=0, le=10)
+
+
+class VisualIndexOut(ORMModel):
+    id: UUID
+    project_id: UUID
+    session_id: UUID
+    media_id: UUID
+    status: str
+    detector: str
+    configuration: dict[str, Any]
+    configuration_fingerprint: str
+    tool_metadata: dict[str, Any] | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class VisualIndexJobOut(BaseModel):
+    visual_index: VisualIndexOut
+    job: JobOut
+    created: bool
+
+
+class SceneSegmentOut(ORMModel):
+    id: UUID
+    visual_index_id: UUID
+    sequence: int
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    detector_score: float | None
+    metadata: dict[str, Any] | None = Field(validation_alias="segment_metadata")
+    created_at: datetime
+
+
+class SceneSegmentPage(BaseModel):
+    items: list[SceneSegmentOut]
+    total: int
+    offset: int
+    limit: int
+
+
+class DerivedAssetOut(ORMModel):
+    id: UUID
+    project_id: UUID
+    session_id: UUID
+    media_id: UUID
+    visual_index_id: UUID | None
+    kind: str
+    storage_uri: str
+    mime_type: str
+    byte_size: int
+    sha256: str
+    width: int | None
+    height: int | None
+    timestamp_seconds: float | None
+    source_start_seconds: float | None
+    source_end_seconds: float | None
+    metadata: dict[str, Any] | None = Field(validation_alias="asset_metadata")
+    created_at: datetime
+
+
+class DerivedAssetPage(BaseModel):
+    items: list[DerivedAssetOut]
+    total: int
+    offset: int
+    limit: int
+</file>
+
+<file path="backend/app/services/visual_index.py">
+import hashlib
+import json
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+import structlog
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import DerivedAsset, MediaAsset, ProcessingJob, SceneSegment, VisualIndex
+from app.repositories.domain import JobRepository, SessionRepository
+from app.repositories.visual_index import VisualIndexRepository
+from app.services.storage import Storage
+from app.services.visual_tools import FrameExtractor, SceneDetector, SceneResult
+
+logger = structlog.get_logger(__name__)
+
+
+class VisualSessionNotReadyError(ValueError):
+    pass
+
+
+class MediaDurationUnavailableError(ValueError):
+    pass
+
+
+class VisualIndexAttemptsExhaustedError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class VisualIndexRequest:
+    scene_detection_enabled: bool
+    scene_detector: str
+    scene_threshold: float
+    periodic_frame_interval_seconds: float
+    frame_width: int
+    image_format: str
+    jpeg_quality: int
+    dedup_tolerance_seconds: float
+
+
+@dataclass(frozen=True)
+class EnsureVisualIndexResult:
+    visual_index: VisualIndex
+    job: ProcessingJob
+    enqueue: bool
+    created: bool
+
+
+@dataclass
+class FrameCandidate:
+    timestamp_seconds: float
+    origins: set[str] = field(default_factory=set)
+    scene_sequences: list[int] = field(default_factory=list)
+    source_start_seconds: float | None = None
+    source_end_seconds: float | None = None
+
+
+def visual_configuration_fingerprint(detector: str, config: dict[str, Any]) -> str:
+    canonical = json.dumps({"detector": detector, **config}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def validate_scenes(scenes: list[SceneResult], duration_seconds: float) -> list[SceneResult]:
+    if not scenes:
+        return []
+    ordered = sorted(scenes, key=lambda item: (item.start_seconds, item.end_seconds))
+    previous_end = 0.0
+    validated: list[SceneResult] = []
+    for index, scene in enumerate(ordered):
+        start = float(scene.start_seconds)
+        end = float(scene.end_seconds)
+        if start < 0 or end < start or end > duration_seconds + 0.001:
+            raise ValueError("scene detector returned an invalid temporal range")
+        if index == 0 and abs(start) > 0.001:
+            raise ValueError("first scene must start at zero")
+        if index > 0 and start < previous_end - 0.001:
+            raise ValueError("scene detector returned overlapping scenes")
+        if index == 0:
+            start = 0.0
+        if index == len(ordered) - 1:
+            end = duration_seconds
+        validated.append(
+            SceneResult(
+                start_seconds=start,
+                end_seconds=end,
+                detector_score=scene.detector_score,
+                metadata=scene.metadata,
+            )
+        )
+        previous_end = end
+    return validated
+
+
+def representative_candidates(
+    duration_seconds: float,
+    periodic_interval_seconds: float,
+    scenes: list[SceneResult],
+    dedup_tolerance_seconds: float,
+) -> list[FrameCandidate]:
+    if duration_seconds <= 0 or periodic_interval_seconds <= 0:
+        raise ValueError("duration and periodic interval must be positive")
+    if dedup_tolerance_seconds < 0:
+        raise ValueError("dedup tolerance must be nonnegative")
+
+    requested: list[FrameCandidate] = []
+    for sequence, scene in enumerate(scenes, start=1):
+        midpoint = scene.start_seconds + (scene.end_seconds - scene.start_seconds) / 2
+        midpoint = min(max(0.0, midpoint), max(0.0, duration_seconds - 0.001))
+        requested.append(
+            FrameCandidate(
+                timestamp_seconds=midpoint,
+                origins={"scene"},
+                scene_sequences=[sequence],
+                source_start_seconds=scene.start_seconds,
+                source_end_seconds=scene.end_seconds,
+            )
+        )
+
+    periodic_index = 0
+    while True:
+        timestamp = periodic_index * periodic_interval_seconds
+        if timestamp >= duration_seconds:
+            break
+        requested.append(FrameCandidate(timestamp_seconds=timestamp, origins={"periodic"}))
+        periodic_index += 1
+
+    kept: list[FrameCandidate] = []
+    for candidate in requested:
+        match = next(
+            (
+                existing
+                for existing in kept
+                if abs(existing.timestamp_seconds - candidate.timestamp_seconds)
+                < dedup_tolerance_seconds
+            ),
+            None,
+        )
+        if match is None:
+            kept.append(candidate)
+            continue
+        match.origins.update(candidate.origins)
+        match.scene_sequences.extend(candidate.scene_sequences)
+        if candidate.source_start_seconds is not None:
+            match.source_start_seconds = (
+                candidate.source_start_seconds
+                if match.source_start_seconds is None
+                else min(match.source_start_seconds, candidate.source_start_seconds)
+            )
+        if candidate.source_end_seconds is not None:
+            match.source_end_seconds = (
+                candidate.source_end_seconds
+                if match.source_end_seconds is None
+                else max(match.source_end_seconds, candidate.source_end_seconds)
+            )
+
+    return sorted(kept, key=lambda item: item.timestamp_seconds)
+
+
+class VisualIndexService:
+    def __init__(self, db: AsyncSession, max_attempts: int):
+        self.db = db
+        self.max_attempts = max_attempts
+
+    async def ensure(
+        self, session_id: UUID, request: VisualIndexRequest
+    ) -> EnsureVisualIndexResult:
+        session = await SessionRepository(self.db).get(session_id)
+        if session is None:
+            raise LookupError("session not found")
+        if session.status != "ready":
+            raise VisualSessionNotReadyError("session must be ready before visual indexing")
+        if session.media.duration_seconds is None or session.media.duration_seconds <= 0:
+            raise MediaDurationUnavailableError("media duration is required for visual indexing")
+
+        config: dict[str, Any] = {
+            "scene_detection_enabled": request.scene_detection_enabled,
+            "scene_detector": request.scene_detector,
+            "scene_threshold": request.scene_threshold,
+            "periodic_frame_interval_seconds": request.periodic_frame_interval_seconds,
+            "frame_width": request.frame_width,
+            "image_format": request.image_format,
+            "jpeg_quality": request.jpeg_quality,
+            "dedup_tolerance_seconds": request.dedup_tolerance_seconds,
+            "scene_representative_strategy": "midpoint",
+        }
+        fingerprint = visual_configuration_fingerprint(request.scene_detector, config)
+        indexes = VisualIndexRepository(self.db)
+        jobs = JobRepository(self.db)
+        existing = await indexes.by_fingerprint(session.media_id, fingerprint)
+        if existing is not None:
+            job = await jobs.for_visual_index(existing.id)
+            if job is None:
+                raise RuntimeError("visual index exists without processing job")
+            enqueue = False
+            if job.status == "failed":
+                if job.attempt_count >= job.max_attempts:
+                    raise VisualIndexAttemptsExhaustedError(
+                        "visual index reached its attempt limit"
+                    )
+                existing.status = "pending"
+                existing.started_at = None
+                existing.completed_at = None
+                existing.tool_metadata = None
+                job.status = "pending"
+                job.stage = "queued"
+                job.progress = 0.0
+                job.error = None
+                job.completed_at = None
+                job.heartbeat_at = None
+                enqueue = True
+                await self.db.commit()
+            return EnsureVisualIndexResult(existing, job, enqueue, False)
+
+        visual_index = VisualIndex(
+            project_id=session.project_id,
+            session_id=session.id,
+            media_id=session.media_id,
+            status="pending",
+            detector=request.scene_detector,
+            configuration=config,
+            configuration_fingerprint=fingerprint,
+        )
+        self.db.add(visual_index)
+        try:
+            await self.db.flush()
+            job = ProcessingJob(
+                project_id=session.project_id,
+                session_id=session.id,
+                media_id=session.media_id,
+                visual_index_id=visual_index.id,
+                job_type="visual_index",
+                status="pending",
+                stage="queued",
+                progress=0.0,
+                max_attempts=self.max_attempts,
+            )
+            self.db.add(job)
+            await self.db.flush()
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            existing = await indexes.by_fingerprint(session.media_id, fingerprint)
+            if existing is None:
+                raise exc
+            existing_job = await jobs.for_visual_index(existing.id)
+            if existing_job is None:
+                raise RuntimeError("concurrent visual index exists without processing job") from exc
+            return EnsureVisualIndexResult(existing, existing_job, False, False)
+        await self.db.refresh(visual_index)
+        await self.db.refresh(job)
+        return EnsureVisualIndexResult(visual_index, job, True, True)
+
+
+class VisualIndexProcessor:
+    def __init__(
+        self,
+        db: AsyncSession,
+        storage: Storage,
+        detector: SceneDetector,
+        extractor: FrameExtractor,
+        batch_size: int,
+    ):
+        self.db = db
+        self.storage = storage
+        self.detector = detector
+        self.extractor = extractor
+        self.batch_size = max(1, batch_size)
+
+    async def run(self, job: ProcessingJob) -> None:
+        if job.visual_index_id is None:
+            raise ValueError("visual index job has no visual_index_id")
+        repository = VisualIndexRepository(self.db)
+        visual_index = await repository.get(job.visual_index_id)
+        media = await self.db.get(MediaAsset, job.media_id)
+        if visual_index is None or media is None:
+            raise LookupError("visual index resources not found")
+        if visual_index.detector != self.detector.name:
+            raise ValueError(
+                f"configured scene detector {visual_index.detector!r} is not available"
+            )
+        if media.duration_seconds is None or media.duration_seconds <= 0:
+            raise MediaDurationUnavailableError("media duration is required for visual indexing")
+
+        duration = media.duration_seconds
+        source = self.storage.resolve(media.storage_uri)
+        await self.storage.delete_derived_namespace(
+            job.project_id, job.session_id, "visual", visual_index.id
+        )
+        await repository.clear_outputs(visual_index.id)
+        visual_index.status = "processing"
+        visual_index.started_at = datetime.now(UTC)
+        visual_index.completed_at = None
+        visual_index.tool_metadata = None
+        job.stage = "detecting_scenes"
+        job.progress = 0.05
+        await self.db.commit()
+        logger.info(
+            "visual_index_started",
+            project_id=str(job.project_id),
+            session_id=str(job.session_id),
+            media_id=str(job.media_id),
+            visual_index_id=str(visual_index.id),
+            job_id=str(job.id),
+            duration=duration,
+        )
+
+        scene_count = 0
+        frame_count = 0
+        try:
+            configuration = visual_index.configuration
+            scenes: list[SceneResult] = []
+            if bool(configuration["scene_detection_enabled"]):
+                scenes = validate_scenes(
+                    await self.detector.detect(
+                        source,
+                        duration,
+                        float(configuration["scene_threshold"]),
+                    ),
+                    duration,
+                )
+            for sequence, scene in enumerate(scenes, start=1):
+                self.db.add(
+                    SceneSegment(
+                        visual_index_id=visual_index.id,
+                        sequence=sequence,
+                        start_seconds=scene.start_seconds,
+                        end_seconds=scene.end_seconds,
+                        duration_seconds=scene.end_seconds - scene.start_seconds,
+                        detector_score=scene.detector_score,
+                        segment_metadata=scene.metadata,
+                    )
+                )
+            scene_count = len(scenes)
+            job.stage = "extracting_frames"
+            job.progress = 0.35
+            job.heartbeat_at = datetime.now(UTC)
+            await self.db.commit()
+
+            candidates = representative_candidates(
+                duration,
+                float(configuration["periodic_frame_interval_seconds"]),
+                scenes,
+                float(configuration["dedup_tolerance_seconds"]),
+            )
+            for sequence, candidate in enumerate(candidates, start=1):
+                extracted = await self.extractor.extract(
+                    source,
+                    candidate.timestamp_seconds,
+                    int(configuration["frame_width"]),
+                    str(configuration["image_format"]),
+                    int(configuration["jpeg_quality"]),
+                )
+                filename = (
+                    f"frame-{sequence:06d}-" f"{round(candidate.timestamp_seconds * 1000):012d}.jpg"
+                )
+                stored = await self.storage.save_derived(
+                    job.project_id,
+                    job.session_id,
+                    "visual",
+                    visual_index.id,
+                    "frames",
+                    filename,
+                    extracted.content,
+                )
+                self.db.add(
+                    DerivedAsset(
+                        project_id=job.project_id,
+                        session_id=job.session_id,
+                        media_id=job.media_id,
+                        visual_index_id=visual_index.id,
+                        kind="representative_frame",
+                        storage_uri=stored.uri,
+                        mime_type=extracted.mime_type,
+                        byte_size=stored.byte_size,
+                        sha256=stored.sha256,
+                        width=extracted.width,
+                        height=extracted.height,
+                        timestamp_seconds=candidate.timestamp_seconds,
+                        source_start_seconds=candidate.source_start_seconds,
+                        source_end_seconds=candidate.source_end_seconds,
+                        asset_metadata={
+                            "origins": sorted(candidate.origins),
+                            "scene_sequences": sorted(set(candidate.scene_sequences)),
+                            "strategy": (
+                                "scene_midpoint" if "scene" in candidate.origins else "periodic"
+                            ),
+                        },
+                    )
+                )
+                frame_count = sequence
+                job.progress = 0.35 + 0.6 * sequence / max(1, len(candidates))
+                job.heartbeat_at = datetime.now(UTC)
+                if sequence % self.batch_size == 0:
+                    await self.db.commit()
+
+            visual_index.status = "completed"
+            visual_index.completed_at = datetime.now(UTC)
+            visual_index.tool_metadata = {
+                "scene_detector": self.detector.name,
+                "frame_extractor": self.extractor.name,
+                "scene_count": scene_count,
+                "frame_count": frame_count,
+                "duration_seconds": duration,
+            }
+            job.stage = "finalizing"
+            job.progress = 0.99
+            job.heartbeat_at = datetime.now(UTC)
+            await self.db.commit()
+            logger.info(
+                "visual_index_completed",
+                project_id=str(job.project_id),
+                session_id=str(job.session_id),
+                media_id=str(job.media_id),
+                visual_index_id=str(visual_index.id),
+                job_id=str(job.id),
+                stage="finalizing",
+                scene_count=scene_count,
+                frame_count=frame_count,
+                duration=duration,
+            )
+        except Exception:
+            await self.db.rollback()
+            try:
+                await self.storage.delete_derived_namespace(
+                    job.project_id, job.session_id, "visual", job.visual_index_id
+                )
+            except Exception:
+                logger.exception(
+                    "visual_index_storage_cleanup_failed",
+                    visual_index_id=str(job.visual_index_id),
+                    job_id=str(job.id),
+                )
+            visual_index = await repository.get(job.visual_index_id)
+            if visual_index is not None:
+                await repository.clear_outputs(visual_index.id)
+                visual_index.status = "failed"
+                visual_index.completed_at = datetime.now(UTC)
+                await self.db.commit()
+            logger.exception(
+                "visual_index_failed",
+                project_id=str(job.project_id),
+                session_id=str(job.session_id),
+                media_id=str(job.media_id),
+                visual_index_id=str(job.visual_index_id),
+                job_id=str(job.id),
+                stage=job.stage,
+                scene_count=scene_count,
+                frame_count=frame_count,
+                duration=duration,
+            )
+            raise
+</file>
+
+<file path="backend/app/services/visual_tools.py">
+import asyncio
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
+
+
+class SceneDetectionError(RuntimeError):
+    pass
+
+
+class FrameExtractionError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class SceneResult:
+    start_seconds: float
+    end_seconds: float
+    detector_score: float | None = None
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ExtractedFrame:
+    content: bytes
+    mime_type: str
+    width: int
+    height: int
+
+
+class SceneDetector(Protocol):
+    name: str
+
+    async def detect(
+        self, source: Path, duration_seconds: float, threshold: float
+    ) -> list[SceneResult]: ...
+
+
+class FrameExtractor(Protocol):
+    name: str
+
+    async def extract(
+        self,
+        source: Path,
+        timestamp_seconds: float,
+        width: int,
+        image_format: str,
+        jpeg_quality: int,
+    ) -> ExtractedFrame: ...
+
+
+def parse_scdet_output(output: str, duration_seconds: float) -> list[SceneResult]:
+    cuts: list[tuple[float, float | None]] = []
+    score: float | None = None
+    for line in output.splitlines():
+        if "lavfi.scd.score=" in line:
+            try:
+                score = float(line.split("lavfi.scd.score=", 1)[1].strip())
+            except ValueError:
+                score = None
+        if "lavfi.scd.time=" in line:
+            try:
+                timestamp = float(line.split("lavfi.scd.time=", 1)[1].strip())
+            except ValueError:
+                continue
+            if 0 < timestamp < duration_seconds:
+                cuts.append((timestamp, score))
+
+    unique: list[tuple[float, float | None]] = []
+    for timestamp, cut_score in sorted(cuts):
+        if unique and abs(timestamp - unique[-1][0]) < 0.001:
+            if cut_score is not None:
+                unique[-1] = (unique[-1][0], cut_score)
+            continue
+        unique.append((timestamp, cut_score))
+
+    starts = [(0.0, None), *unique]
+    scenes: list[SceneResult] = []
+    for index, (start, start_score) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else duration_seconds
+        if end < start:
+            continue
+        scenes.append(
+            SceneResult(
+                start_seconds=start,
+                end_seconds=end,
+                detector_score=start_score,
+                metadata={"boundary_source": "ffmpeg_scdet"},
+            )
+        )
+    return scenes
+
+
+class FFmpegSceneDetector:
+    name = "ffmpeg_scdet"
+
+    def __init__(self, binary: str = "ffmpeg"):
+        self.binary = binary
+
+    async def detect(
+        self, source: Path, duration_seconds: float, threshold: float
+    ) -> list[SceneResult]:
+        if duration_seconds <= 0:
+            raise ValueError("duration must be positive")
+        if not 0 <= threshold <= 100:
+            raise ValueError("scene threshold must be between 0 and 100")
+        process = await asyncio.create_subprocess_exec(
+            self.binary,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-i",
+            str(source),
+            "-an",
+            "-vf",
+            f"scdet=t={threshold}:s=1,metadata=print:file=-",
+            "-f",
+            "null",
+            "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode:
+            raise SceneDetectionError(
+                stderr.decode(errors="replace").strip() or "ffmpeg scene detection failed"
+            )
+        return parse_scdet_output(stdout.decode(errors="replace"), duration_seconds)
+
+
+def jpeg_qscale(quality: int) -> int:
+    if not 1 <= quality <= 100:
+        raise ValueError("jpeg quality must be between 1 and 100")
+    return max(2, min(31, round(2 + (100 - quality) * 29 / 99)))
+
+
+class FFmpegFrameExtractor:
+    name = "ffmpeg"
+
+    def __init__(self, binary: str = "ffmpeg"):
+        self.binary = binary
+
+    async def extract(
+        self,
+        source: Path,
+        timestamp_seconds: float,
+        width: int,
+        image_format: str,
+        jpeg_quality: int,
+    ) -> ExtractedFrame:
+        if timestamp_seconds < 0:
+            raise ValueError("frame timestamp must be nonnegative")
+        if width <= 0:
+            raise ValueError("frame width must be positive")
+        if image_format != "jpeg":
+            raise ValueError("only jpeg representative frames are supported")
+        process = await asyncio.create_subprocess_exec(
+            self.binary,
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-nostdin",
+            "-ss",
+            f"{timestamp_seconds:.6f}",
+            "-i",
+            str(source),
+            "-map",
+            "0:v:0",
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={width}:-2,showinfo",
+            "-q:v",
+            str(jpeg_qscale(jpeg_quality)),
+            "-c:v",
+            "mjpeg",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        message = stderr.decode(errors="replace")
+        if process.returncode or not stdout:
+            raise FrameExtractionError(message.strip() or "ffmpeg frame extraction failed")
+        dimensions = re.search(r"\bs:(\d+)x(\d+)\b", message)
+        if dimensions is None:
+            raise FrameExtractionError("ffmpeg did not report extracted frame dimensions")
+        return ExtractedFrame(
+            content=stdout,
+            mime_type="image/jpeg",
+            width=int(dimensions.group(1)),
+            height=int(dimensions.group(2)),
+        )
+</file>
+
+<file path="backend/tests/test_derived_storage.py">
+import hashlib
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+
+from app.services.storage import LocalStorage
+
+
+async def test_derived_asset_is_atomic_hashed_resolvable_and_deletable(
+    tmp_path: Path,
+) -> None:
+    project_id, session_id, visual_index_id = uuid4(), uuid4(), uuid4()
+    storage = LocalStorage(tmp_path)
+    first = await storage.save_derived(
+        project_id, session_id, "visual", visual_index_id, "frames", "frame.jpg", b"one"
+    )
+    replaced = await storage.save_derived(
+        project_id, session_id, "visual", visual_index_id, "frames", "frame.jpg", b"two"
+    )
+
+    assert replaced.uri == first.uri
+    assert replaced.byte_size == 3
+    assert replaced.sha256 == hashlib.sha256(b"two").hexdigest()
+    assert storage.resolve(replaced.uri).read_bytes() == b"two"
+    assert not list(storage.resolve(replaced.uri).parent.glob("*.tmp"))
+
+    await storage.delete_derived_namespace(project_id, session_id, "visual", visual_index_id)
+    assert not storage.resolve(replaced.uri).exists()
+
+
+async def test_derived_storage_rejects_unsafe_path_components(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    with pytest.raises(ValueError, match="unsafe storage path component"):
+        await storage.save_derived(
+            uuid4(), uuid4(), "../visual", uuid4(), "frames", "frame.jpg", b"jpeg"
+        )
+</file>
+
+<file path="backend/tests/test_visual_index_api.py">
+from uuid import UUID
+
+from app.models import DerivedAsset, MediaAsset, MediaSession, SceneSegment, VisualIndex
+
+
+async def test_visual_index_api_creation_idempotency_and_pagination(
+    client, session_factory
+) -> None:
+    project = client.post("/projects", json={"name": "Witcher"}).json()
+    ingestion = client.post(
+        f"/projects/{project['id']}/sessions",
+        data={"label": "001"},
+        files={
+            "video": ("001.mp4", b"fake-video", "video/mp4"),
+            "notes": ("001.txt", b"note", "text/plain"),
+        },
+    ).json()
+    session_id = UUID(ingestion["session"]["id"])
+
+    async with session_factory() as db:
+        session = await db.get(MediaSession, session_id)
+        assert session is not None
+        media = await db.get(MediaAsset, session.media_id)
+        assert media is not None
+        media.duration_seconds = 30.0
+        session.status = "ready"
+        await db.commit()
+
+    payload = {
+        "scene_threshold": 10.0,
+        "periodic_frame_interval_seconds": 10.0,
+        "frame_width": 640,
+        "dedup_tolerance_seconds": 0.5,
+    }
+    response = client.post(f"/sessions/{session_id}/visual-indexes", json=payload)
+    assert response.status_code == 202
+    created = response.json()
+    visual_index_id = UUID(created["visual_index"]["id"])
+    assert created["created"] is True
+    assert created["job"]["status"] == "pending"
+    assert created["job"]["visual_index_id"] == str(visual_index_id)
+
+    repeated = client.post(f"/sessions/{session_id}/visual-indexes", json=payload)
+    assert repeated.status_code == 202
+    assert repeated.json()["created"] is False
+    assert repeated.json()["visual_index"]["id"] == str(visual_index_id)
+    assert repeated.json()["job"]["id"] == created["job"]["id"]
+
+    async with session_factory() as db:
+        visual_index = await db.get(VisualIndex, visual_index_id)
+        assert visual_index is not None
+        db.add_all(
+            [
+                SceneSegment(
+                    visual_index_id=visual_index_id,
+                    sequence=1,
+                    start_seconds=0.0,
+                    end_seconds=10.0,
+                    duration_seconds=10.0,
+                    detector_score=18.0,
+                    segment_metadata={"cut": "opening"},
+                ),
+                SceneSegment(
+                    visual_index_id=visual_index_id,
+                    sequence=2,
+                    start_seconds=10.0,
+                    end_seconds=30.0,
+                    duration_seconds=20.0,
+                    detector_score=22.0,
+                    segment_metadata={"cut": "gameplay"},
+                ),
+                DerivedAsset(
+                    project_id=visual_index.project_id,
+                    session_id=session_id,
+                    media_id=visual_index.media_id,
+                    visual_index_id=visual_index_id,
+                    kind="representative_frame",
+                    storage_uri=f"local://visual/{visual_index_id}/frame-1.jpg",
+                    mime_type="image/jpeg",
+                    byte_size=4,
+                    sha256="a" * 64,
+                    width=640,
+                    height=360,
+                    timestamp_seconds=5.0,
+                    asset_metadata={"origins": ["scene"]},
+                ),
+                DerivedAsset(
+                    project_id=visual_index.project_id,
+                    session_id=session_id,
+                    media_id=visual_index.media_id,
+                    visual_index_id=visual_index_id,
+                    kind="representative_frame",
+                    storage_uri=f"local://visual/{visual_index_id}/frame-2.jpg",
+                    mime_type="image/jpeg",
+                    byte_size=4,
+                    sha256="b" * 64,
+                    width=640,
+                    height=360,
+                    timestamp_seconds=20.0,
+                    asset_metadata={"origins": ["periodic", "scene"]},
+                ),
+            ]
+        )
+        await db.commit()
+
+    listing = client.get(f"/sessions/{session_id}/visual-indexes")
+    assert listing.status_code == 200
+    assert [item["id"] for item in listing.json()] == [str(visual_index_id)]
+
+    detail = client.get(f"/visual-indexes/{visual_index_id}")
+    assert detail.status_code == 200
+    assert detail.json()["detector"] == "ffmpeg_scdet"
+
+    scenes = client.get(
+        f"/visual-indexes/{visual_index_id}/scenes", params={"offset": 1, "limit": 1}
+    )
+    assert scenes.status_code == 200
+    assert scenes.json()["total"] == 2
+    assert scenes.json()["items"][0]["sequence"] == 2
+    assert scenes.json()["items"][0]["metadata"] == {"cut": "gameplay"}
+
+    frames = client.get(
+        f"/visual-indexes/{visual_index_id}/frames", params={"offset": 1, "limit": 1}
+    )
+    assert frames.status_code == 200
+    assert frames.json()["total"] == 2
+    assert frames.json()["items"][0]["timestamp_seconds"] == 20.0
+    assert frames.json()["items"][0]["metadata"]["origins"] == ["periodic", "scene"]
+    assert "frames" not in ingestion["session"]
+    assert "scenes" not in ingestion["session"]
+
+
+def test_visual_index_requires_ready_session(client) -> None:
+    project = client.post("/projects", json={"name": "Witcher"}).json()
+    ingestion = client.post(
+        f"/projects/{project['id']}/sessions",
+        data={"label": "001"},
+        files={
+            "video": ("001.mp4", b"fake-video", "video/mp4"),
+            "notes": ("001.txt", b"note", "text/plain"),
+        },
+    ).json()
+    response = client.post(f"/sessions/{ingestion['session']['id']}/visual-indexes", json={})
+    assert response.status_code == 409
+</file>
+
+<file path="backend/tests/test_visual_index.py">
+import hashlib
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
+
+from app.models import MediaAsset, MediaProject, MediaSession
+from app.repositories.visual_index import VisualIndexRepository
+from app.services.jobs import JobExecutor, ProcessorRegistry
+from app.services.storage import LocalStorage
+from app.services.visual_index import (
+    VisualIndexProcessor,
+    VisualIndexRequest,
+    VisualIndexService,
+    representative_candidates,
+)
+from app.services.visual_tools import ExtractedFrame, SceneResult
+
+
+class FakeSceneDetector:
+    name = "ffmpeg_scdet"
+
+    async def detect(
+        self, source: Path, duration_seconds: float, threshold: float
+    ) -> list[SceneResult]:
+        assert source.read_bytes() == b"video"
+        assert duration_seconds == 30.0
+        assert threshold == 10.0
+        return [
+            SceneResult(0.0, 10.0, 18.0, {"cut": "opening"}),
+            SceneResult(10.0, 30.0, 24.0, {"cut": "gameplay"}),
+        ]
+
+
+class FakeFrameExtractor:
+    name = "ffmpeg"
+
+    def __init__(self, fail_after: int | None = None):
+        self.calls = 0
+        self.fail_after = fail_after
+
+    async def extract(
+        self,
+        source: Path,
+        timestamp_seconds: float,
+        width: int,
+        image_format: str,
+        jpeg_quality: int,
+    ) -> ExtractedFrame:
+        if self.fail_after is not None and self.calls >= self.fail_after:
+            raise RuntimeError("frame extraction interrupted")
+        self.calls += 1
+        assert source.read_bytes() == b"video"
+        assert width == 640
+        assert image_format == "jpeg"
+        assert jpeg_quality == 85
+        return ExtractedFrame(
+            content=f"jpeg:{timestamp_seconds:.3f}".encode(),
+            mime_type="image/jpeg",
+            width=640,
+            height=360,
+        )
+
+
+async def ready_session(db, storage: LocalStorage) -> MediaSession:
+    project = MediaProject(name=str(uuid4()))
+    db.add(project)
+    await db.flush()
+    session_id, media_id = uuid4(), uuid4()
+    media = MediaAsset(
+        id=media_id,
+        project_id=project.id,
+        storage_uri=f"local://projects/{project.id}/sessions/{session_id}/source/gameplay.mp4",
+        original_filename="gameplay.mp4",
+        content_type="video/mp4",
+        byte_size=5,
+        sha256="a" * 64,
+        duration_seconds=30.0,
+    )
+    session = MediaSession(
+        id=session_id,
+        project_id=project.id,
+        media_id=media_id,
+        label="session",
+        notes_filename="notes.txt",
+        raw_notes="raw",
+        status="ready",
+    )
+    source = storage.resolve(media.storage_uri)
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"video")
+    db.add_all([media, session])
+    await db.commit()
+    return session
+
+
+def request(*, width: int = 640) -> VisualIndexRequest:
+    return VisualIndexRequest(
+        scene_detection_enabled=True,
+        scene_detector="ffmpeg_scdet",
+        scene_threshold=10.0,
+        periodic_frame_interval_seconds=10.0,
+        frame_width=width,
+        image_format="jpeg",
+        jpeg_quality=85,
+        dedup_tolerance_seconds=0.5,
+    )
+
+
+def registry(storage: LocalStorage, extractor: FakeFrameExtractor) -> ProcessorRegistry:
+    return ProcessorRegistry(
+        {
+            "visual_index": lambda db: VisualIndexProcessor(
+                db, storage, FakeSceneDetector(), extractor, batch_size=1
+            )
+        }
+    )
+
+
+def test_representative_candidates_prioritize_scene_midpoints_and_merge_origins() -> None:
+    candidates = representative_candidates(
+        30.0,
+        10.0,
+        [SceneResult(0.0, 10.0), SceneResult(10.0, 30.0)],
+        0.5,
+    )
+    assert [item.timestamp_seconds for item in candidates] == [0.0, 5.0, 10.0, 20.0]
+    merged = candidates[-1]
+    assert merged.origins == {"periodic", "scene"}
+    assert merged.scene_sequences == [2]
+    assert (merged.source_start_seconds, merged.source_end_seconds) == (10.0, 30.0)
+
+
+async def test_visual_index_persists_scenes_frames_and_metadata(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    async with session_factory() as db:
+        session = await ready_session(db, storage)
+        result = await VisualIndexService(db, max_attempts=3).ensure(session.id, request())
+
+        assert result.created and result.enqueue
+        assert result.job.job_type == "visual_index"
+        assert result.job.visual_index_id == result.visual_index.id
+        assert await JobExecutor(db, registry(storage, FakeFrameExtractor())).execute(result.job.id)
+
+        await db.refresh(result.visual_index)
+        await db.refresh(result.job)
+        await db.refresh(session)
+        scenes, scene_total = await VisualIndexRepository(db).scenes(result.visual_index.id, 0, 100)
+        frames, frame_total = await VisualIndexRepository(db).frames(result.visual_index.id, 0, 100)
+
+        assert result.visual_index.status == "completed"
+        assert result.job.status == "completed"
+        assert result.job.attempt_count == 1
+        assert session.status == "ready"
+        assert scene_total == 2
+        assert [item.sequence for item in scenes] == [1, 2]
+        assert [(item.start_seconds, item.end_seconds) for item in scenes] == [
+            (0.0, 10.0),
+            (10.0, 30.0),
+        ]
+        assert frame_total == 4
+        assert [item.timestamp_seconds for item in frames] == [0.0, 5.0, 10.0, 20.0]
+        merged = frames[-1]
+        assert merged.asset_metadata["origins"] == ["periodic", "scene"]
+        assert (merged.width, merged.height, merged.mime_type) == (640, 360, "image/jpeg")
+        content = storage.resolve(merged.storage_uri).read_bytes()
+        assert merged.byte_size == len(content)
+        assert merged.sha256 == hashlib.sha256(content).hexdigest()
+
+
+async def test_visual_index_is_idempotent_and_changed_config_is_distinct(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    async with session_factory() as db:
+        session = await ready_session(db, storage)
+        service = VisualIndexService(db, max_attempts=3)
+        first = await service.ensure(session.id, request())
+        same = await service.ensure(session.id, request())
+        different = await service.ensure(session.id, request(width=768))
+
+        assert same.visual_index.id == first.visual_index.id
+        assert same.job.id == first.job.id
+        assert not same.created and not same.enqueue
+        assert different.visual_index.id != first.visual_index.id
+        assert different.visual_index.configuration_fingerprint != (
+            first.visual_index.configuration_fingerprint
+        )
+
+
+async def test_failure_cleans_partial_outputs_and_retry_does_not_duplicate(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    async with session_factory() as db:
+        session = await ready_session(db, storage)
+        result = await VisualIndexService(db, max_attempts=3).ensure(session.id, request())
+        assert not await JobExecutor(
+            db, registry(storage, FakeFrameExtractor(fail_after=2))
+        ).execute(result.job.id)
+
+        await db.refresh(result.visual_index)
+        await db.refresh(result.job)
+        await db.refresh(session)
+        _, scene_total = await VisualIndexRepository(db).scenes(result.visual_index.id, 0, 100)
+        _, frame_total = await VisualIndexRepository(db).frames(result.visual_index.id, 0, 100)
+        namespace = (
+            tmp_path
+            / "projects"
+            / str(session.project_id)
+            / "sessions"
+            / str(session.id)
+            / "derived"
+            / "visual"
+            / str(result.visual_index.id)
+        )
+        assert result.visual_index.status == "failed"
+        assert result.job.status == "failed"
+        assert session.status == "ready"
+        assert (scene_total, frame_total) == (0, 0)
+        assert not namespace.exists()
+
+        retry = await VisualIndexService(db, max_attempts=3).ensure(session.id, request())
+        assert retry.enqueue and not retry.created
+        assert await JobExecutor(db, registry(storage, FakeFrameExtractor())).execute(retry.job.id)
+        _, scene_total = await VisualIndexRepository(db).scenes(retry.visual_index.id, 0, 100)
+        frames, frame_total = await VisualIndexRepository(db).frames(retry.visual_index.id, 0, 100)
+        assert retry.job.attempt_count == 2
+        assert (scene_total, frame_total) == (2, 4)
+        assert len({item.storage_uri for item in frames}) == 4
+
+
+async def test_stale_visual_job_is_recovered_without_demoting_session(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    async with session_factory() as db:
+        session = await ready_session(db, storage)
+        result = await VisualIndexService(db, max_attempts=3).ensure(session.id, request())
+        result.job.status = "processing"
+        result.job.attempt_count = 1
+        result.job.heartbeat_at = datetime.now(UTC) - timedelta(minutes=10)
+        result.visual_index.status = "processing"
+        await db.commit()
+
+        recovered = await JobExecutor(db, ProcessorRegistry()).recover(
+            datetime.now(UTC) - timedelta(minutes=5)
+        )
+        await db.refresh(result.job)
+        await db.refresh(result.visual_index)
+        await db.refresh(session)
+        assert recovered == [result.job.id]
+        assert result.job.status == "pending"
+        assert result.job.stage == "recovered"
+        assert result.visual_index.status == "pending"
+        assert session.status == "ready"
+</file>
+
+<file path="backend/tests/test_visual_tools.py">
+import pytest
+
+from app.services.visual_tools import jpeg_qscale, parse_scdet_output
+
+
+def test_scdet_output_becomes_contiguous_scenes() -> None:
+    output = """
+lavfi.scd.score=19.50
+lavfi.scd.time=5.000000
+lavfi.scd.score=22.25
+lavfi.scd.time=12.000000
+"""
+    scenes = parse_scdet_output(output, 20.0)
+    assert [(item.start_seconds, item.end_seconds) for item in scenes] == [
+        (0.0, 5.0),
+        (5.0, 12.0),
+        (12.0, 20.0),
+    ]
+    assert scenes[1].detector_score == 19.5
+    assert scenes[2].detector_score == 22.25
+
+
+def test_scdet_parser_ignores_out_of_range_and_duplicate_cuts() -> None:
+    output = """
+lavfi.scd.score=9
+lavfi.scd.time=-1
+lavfi.scd.score=10
+lavfi.scd.time=4
+lavfi.scd.score=11
+lavfi.scd.time=4
+lavfi.scd.score=12
+lavfi.scd.time=99
+"""
+    scenes = parse_scdet_output(output, 8.0)
+    assert [(item.start_seconds, item.end_seconds) for item in scenes] == [
+        (0.0, 4.0),
+        (4.0, 8.0),
+    ]
+
+
+def test_jpeg_quality_is_mapped_to_ffmpeg_qscale() -> None:
+    assert jpeg_qscale(100) == 2
+    assert jpeg_qscale(1) == 31
+    assert jpeg_qscale(85) < jpeg_qscale(50)
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        jpeg_qscale(0)
+</file>
+
+<file path="backend/alembic/versions/0001_initial.py">
+"""Initial domain."""
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+revision = "0001_initial"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    uuid = postgresql.UUID(as_uuid=True)
+    timestamps = [
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    ]
+    op.create_table("media_projects",
+        sa.Column("id", uuid, primary_key=True), sa.Column("name", sa.String(200), nullable=False),
+        sa.Column("description", sa.Text), *timestamps)
+    op.create_table("media_assets",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column("project_id", uuid, sa.ForeignKey("media_projects.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("storage_uri", sa.String(1000), nullable=False, unique=True),
+        sa.Column("original_filename", sa.String(500), nullable=False),
+        sa.Column("content_type", sa.String(200)), sa.Column("byte_size", sa.BigInteger, nullable=False),
+        sa.Column("sha256", sa.String(64), nullable=False), sa.Column("duration_seconds", sa.Float),
+        sa.Column("format_name", sa.String(200)), sa.Column("video_codec", sa.String(100)),
+        sa.Column("audio_codec", sa.String(100)), sa.Column("fps", sa.Float),
+        sa.Column("width", sa.Integer), sa.Column("height", sa.Integer),
+        sa.Column("probe_metadata", postgresql.JSONB),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False))
+    op.create_index("ix_media_assets_project_sha256", "media_assets", ["project_id", "sha256"])
+    op.create_table("media_sessions",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column("project_id", uuid, sa.ForeignKey("media_projects.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("media_id", uuid, sa.ForeignKey("media_assets.id", ondelete="RESTRICT"), nullable=False, unique=True),
+        sa.Column("label", sa.String(200), nullable=False), sa.Column("notes_filename", sa.String(500), nullable=False),
+        sa.Column("raw_notes", sa.Text, nullable=False), sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("idempotency_key", sa.String(200)),
+        *timestamps, sa.UniqueConstraint("project_id", "idempotency_key", name="uq_session_project_idempotency"))
+    op.create_table("notes",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column("session_id", uuid, sa.ForeignKey("media_sessions.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("order", sa.Integer, nullable=False), sa.Column("raw", sa.Text, nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.UniqueConstraint("session_id", "order", name="uq_note_session_order"))
+    op.create_table("processing_jobs",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column("project_id", uuid, sa.ForeignKey("media_projects.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("session_id", uuid, sa.ForeignKey("media_sessions.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("media_id", uuid, sa.ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("job_type", sa.String(50), nullable=False), sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("stage", sa.String(100), nullable=False), sa.Column("progress", sa.Float, nullable=False),
+        sa.Column("error", sa.Text), sa.Column("started_at", sa.DateTime(timezone=True)),
+        sa.Column("completed_at", sa.DateTime(timezone=True)), *timestamps)
+    op.create_index("ix_processing_jobs_status_created", "processing_jobs", ["status", "created_at"])
+    op.execute("""CREATE FUNCTION immutable_raw() RETURNS trigger AS $$ BEGIN
+      IF TG_TABLE_NAME = 'notes' AND NEW.raw IS DISTINCT FROM OLD.raw THEN RAISE EXCEPTION 'raw is immutable'; END IF;
+      IF TG_TABLE_NAME = 'media_sessions' AND NEW.raw_notes IS DISTINCT FROM OLD.raw_notes THEN RAISE EXCEPTION 'raw_notes is immutable'; END IF;
+      RETURN NEW; END; $$ LANGUAGE plpgsql;""")
+    op.execute("CREATE TRIGGER note_raw_immutable BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION immutable_raw()")
+    op.execute("CREATE TRIGGER document_raw_immutable BEFORE UPDATE ON media_sessions FOR EACH ROW EXECUTE FUNCTION immutable_raw()")
+
+
+def downgrade() -> None:
+    op.execute("DROP FUNCTION IF EXISTS immutable_raw() CASCADE")
+    op.drop_table("processing_jobs")
+    op.drop_table("notes")
+    op.drop_table("media_sessions")
+    op.drop_table("media_assets")
+    op.drop_table("media_projects")
+</file>
 
 <file path="backend/alembic/versions/0002_transcriptions.py">
 """Add durable job recovery and timestamped transcriptions."""
@@ -239,6 +1979,161 @@ def downgrade() -> None:
     op.drop_table("transcriptions")
 </file>
 
+<file path="backend/alembic/env.py">
+import asyncio
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
+
+from app.core.config import settings
+from app.models import Base
+
+config = context.config
+config.set_main_option("sqlalchemy.url", settings.database_url)
+if config.config_file_name:
+    fileConfig(config.config_file_name)
+target_metadata = Base.metadata
+
+
+def offline() -> None:
+    context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def sync_migrations(connection: object) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+async def online() -> None:
+    engine = async_engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
+    async with engine.connect() as connection:
+        await connection.run_sync(sync_migrations)
+    await engine.dispose()
+
+
+if context.is_offline_mode():
+    offline()
+else:
+    asyncio.run(online())
+</file>
+
+<file path="backend/app/api/routers/__init__.py">
+
+</file>
+
+<file path="backend/app/api/routers/jobs.py">
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException
+
+from app.api.dependencies import DB
+from app.repositories.domain import JobRepository
+from app.schemas.domain import JobOut
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+@router.get("/{job_id}", response_model=JobOut)
+async def get_job(job_id: UUID, db: DB) -> object:
+    item = await JobRepository(db).get(job_id)
+    if item is None:
+        raise HTTPException(404, "Job not found")
+    return item
+</file>
+
+<file path="backend/app/api/routers/projects.py">
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, File, Form, Header, HTTPException, Query, UploadFile
+
+from app.api.dependencies import DB, StorageDep
+from app.repositories.domain import ProjectRepository, SessionRepository
+from app.schemas.domain import ProjectCreate, ProjectOut, SessionIngestOut, SessionSummary
+from app.services.ingestion import IngestionService, InvalidNotesError, ProjectNotFoundError
+from app.workers.runner import job_runner
+
+router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+@router.post("", response_model=ProjectOut, status_code=201)
+async def create_project(payload: ProjectCreate, db: DB) -> object:
+    item = await ProjectRepository(db).create(payload.name, payload.description)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+@router.get("", response_model=list[ProjectOut])
+async def list_projects(
+    db: DB, offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=100)] = 50
+) -> object:
+    return await ProjectRepository(db).list(offset, limit)
+
+
+@router.get("/{project_id}", response_model=ProjectOut)
+async def get_project(project_id: UUID, db: DB) -> object:
+    item = await ProjectRepository(db).get(project_id)
+    if item is None:
+        raise HTTPException(404, "Project not found")
+    return item
+
+
+@router.get("/{project_id}/sessions", response_model=list[SessionSummary])
+async def list_sessions(project_id: UUID, db: DB) -> object:
+    if await ProjectRepository(db).get(project_id) is None:
+        raise HTTPException(404, "Project not found")
+    return await SessionRepository(db).list_for_project(project_id)
+
+
+@router.post("/{project_id}/sessions", response_model=SessionIngestOut, status_code=202)
+async def ingest_session(
+    project_id: UUID,
+    db: DB,
+    storage: StorageDep,
+    label: Annotated[str, Form(min_length=1, max_length=200)],
+    video: Annotated[UploadFile, File()],
+    notes: Annotated[UploadFile, File()],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=200)] = None,
+) -> object:
+    try:
+        result = await IngestionService(db, storage).ingest(
+            project_id, label, video, notes, idempotency_key
+        )
+    except ProjectNotFoundError as exc:
+        raise HTTPException(404, "Project not found") from exc
+    except InvalidNotesError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if result.created:
+        job_runner.enqueue(result.job.id)
+    return SessionIngestOut(session=result.session, job=result.job)
+</file>
+
+<file path="backend/app/api/routers/sessions.py">
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException
+
+from app.api.dependencies import DB
+from app.repositories.domain import SessionRepository
+from app.schemas.domain import SessionOut
+
+router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+@router.get("/{session_id}", response_model=SessionOut)
+async def get_session(session_id: UUID, db: DB) -> object:
+    item = await SessionRepository(db).get(session_id)
+    if item is None:
+        raise HTTPException(404, "Session not found")
+    return item
+</file>
+
 <file path="backend/app/api/routers/transcriptions.py">
 from typing import Annotated
 from uuid import UUID
@@ -349,6 +2244,100 @@ async def list_segments(
     return TranscriptSegmentPage(items=list(items), total=total, offset=offset, limit=limit)
 </file>
 
+<file path="backend/app/api/__init__.py">
+
+</file>
+
+<file path="backend/app/api/dependencies.py">
+from functools import lru_cache
+from typing import Annotated
+
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.database import get_db
+from app.services.storage import LocalStorage, Storage
+
+
+@lru_cache
+def get_storage() -> Storage:
+    return LocalStorage(settings.storage_root)
+
+
+DB = Annotated[AsyncSession, Depends(get_db)]
+StorageDep = Annotated[Storage, Depends(get_storage)]
+</file>
+
+<file path="backend/app/core/__init__.py">
+
+</file>
+
+<file path="backend/app/core/database.py">
+from collections.abc import AsyncIterator
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.core.config import settings
+
+engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    async with AsyncSessionLocal() as session:
+        yield session
+</file>
+
+<file path="backend/app/core/logging.py">
+import logging
+
+import structlog
+
+
+def configure_logging(level: str) -> None:
+    logging.basicConfig(level=level.upper(), format="%(message)s")
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+</file>
+
+<file path="backend/app/models/base.py">
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import DateTime, Uuid, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class UUIDPrimaryKey:
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+</file>
+
+<file path="backend/app/repositories/__init__.py">
+
+</file>
+
 <file path="backend/app/repositories/transcription.py">
 from collections.abc import Sequence
 from uuid import UUID
@@ -404,6 +2393,10 @@ class TranscriptionRepository:
         await self.db.execute(
             delete(TranscriptSegment).where(TranscriptSegment.transcription_id == transcription_id)
         )
+</file>
+
+<file path="backend/app/schemas/__init__.py">
+
 </file>
 
 <file path="backend/app/schemas/transcription.py">
@@ -470,6 +2463,10 @@ class TranscriptSegmentPage(BaseModel):
     limit: int
 </file>
 
+<file path="backend/app/services/__init__.py">
+
+</file>
+
 <file path="backend/app/services/jobs.py">
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -479,7 +2476,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaSession, ProcessingJob, Transcription
+from app.models import MediaSession, ProcessingJob, Transcription, VisualIndex
 from app.repositories.domain import JobRepository
 
 logger = structlog.get_logger(__name__)
@@ -588,6 +2585,11 @@ class JobExecutor:
                     if transcription is not None:
                         transcription.status = "pending"
                         transcription.completed_at = None
+                elif job.visual_index_id is not None:
+                    visual_index = await self.db.get(VisualIndex, job.visual_index_id)
+                    if visual_index is not None:
+                        visual_index.status = "pending"
+                        visual_index.completed_at = None
             recovered.append(job.id)
         await self.db.commit()
         return recovered
@@ -603,12 +2605,116 @@ class JobExecutor:
             if transcription is not None:
                 transcription.status = "failed"
                 transcription.completed_at = datetime.now(UTC)
+        elif job.visual_index_id is not None:
+            visual_index = await self.db.get(VisualIndex, job.visual_index_id)
+            if visual_index is not None:
+                visual_index.status = "failed"
+                visual_index.completed_at = datetime.now(UTC)
         elif job.job_type == "initial_index":
             session = await self.db.get(MediaSession, job.session_id)
             if session is not None:
                 session.status = "failed"
         if commit:
             await self.db.commit()
+</file>
+
+<file path="backend/app/services/note_parser.py">
+import re
+
+_BLANK_LINE = re.compile(r"\r?\n[ \t]*\r?\n|\r[ \t]*\r")
+
+
+def split_note_units(raw: str) -> list[str]:
+    if not raw:
+        return []
+    if _BLANK_LINE.search(raw):
+        return [part for part in _BLANK_LINE.split(raw) if part.strip()]
+    return [line for line in raw.splitlines() if line.strip()]
+</file>
+
+<file path="backend/app/services/probe.py">
+import asyncio
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+class ProbeError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    duration_seconds: float | None
+    format_name: str | None
+    video_codec: str | None
+    audio_codec: str | None
+    fps: float | None
+    width: int | None
+    height: int | None
+    raw: dict[str, Any]
+
+
+class FFprobe:
+    def __init__(self, binary: str = "ffprobe"):
+        self.binary = binary
+
+    async def inspect(self, path: Path) -> ProbeResult:
+        process = await asyncio.create_subprocess_exec(
+            self.binary,
+            "-v",
+            "error",
+            "-show_format",
+            "-show_streams",
+            "-of",
+            "json",
+            str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode:
+            raise ProbeError(stderr.decode(errors="replace").strip() or "ffprobe failed")
+        return parse_probe(json.loads(stdout))
+
+
+def _number(value: Any, cast: type[float] | type[int]) -> float | int | None:
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fps(value: Any) -> float | None:
+    try:
+        top, bottom = str(value).split("/", 1)
+        return float(top) / float(bottom) if float(bottom) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_probe(raw: dict[str, Any]) -> ProbeResult:
+    streams = raw.get("streams", [])
+    video: dict[str, Any] = next(
+        (item for item in streams if item.get("codec_type") == "video"), {}
+    )
+    audio: dict[str, Any] = next(
+        (item for item in streams if item.get("codec_type") == "audio"), {}
+    )
+    fmt = raw.get("format", {})
+    width = _number(video.get("width"), int)
+    height = _number(video.get("height"), int)
+    return ProbeResult(
+        duration_seconds=_number(fmt.get("duration"), float),
+        format_name=fmt.get("format_name"),
+        video_codec=video.get("codec_name"),
+        audio_codec=audio.get("codec_name"),
+        fps=_fps(video.get("avg_frame_rate") or video.get("r_frame_rate")),
+        width=width if isinstance(width, int) else None,
+        height=height if isinstance(height, int) else None,
+        raw=raw,
+    )
 </file>
 
 <file path="backend/app/services/transcription_provider.py">
@@ -997,6 +3103,103 @@ class TranscriptionProcessor:
             raise
 </file>
 
+<file path="backend/app/workers/__init__.py">
+
+</file>
+
+<file path="backend/app/__init__.py">
+
+</file>
+
+<file path="backend/tests/conftest.py">
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
+from app.api.dependencies import get_storage
+from app.core.database import get_db
+from app.main import create_app
+from app.models import Base
+from app.services.storage import LocalStorage
+
+
+@pytest.fixture
+async def session_factory():
+    engine = create_async_engine(
+        "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.fixture
+def client(session_factory, tmp_path: Path):
+    app = create_app(start_worker=False)
+
+    async def database() -> AsyncIterator[AsyncSession]:
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = database
+    app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
+    with TestClient(app) as test_client:
+        yield test_client
+</file>
+
+<file path="backend/tests/test_api.py">
+def test_project_and_session_ingestion_preserve_raw(client) -> None:
+    project = client.post("/projects", json={"name": "Witcher"}).json()
+    raw = " primeira nota  \r\n\r\nsegunda\r\nlinha\r\n"
+    response = client.post(
+        f"/projects/{project['id']}/sessions",
+        data={"label": "001"},
+        files={
+            "video": ("001.mp4", b"fake-video", "video/mp4"),
+            "notes": ("001.txt", raw.encode(), "text/plain"),
+        },
+        headers={"Idempotency-Key": "session-001"},
+    )
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["session"]["raw_notes"] == raw
+    assert [n["raw"] for n in payload["session"]["notes"]] == [
+        " primeira nota  ",
+        "segunda\r\nlinha\r\n",
+    ]
+    assert payload["session"]["media"]["storage_uri"].startswith("local://")
+    assert payload["job"]["status"] == "pending"
+
+    repeated = client.post(
+        f"/projects/{project['id']}/sessions",
+        data={"label": "ignored"},
+        files={
+            "video": ("other.mp4", b"other", "video/mp4"),
+            "notes": ("other.txt", b"other", "text/plain"),
+        },
+        headers={"Idempotency-Key": "session-001"},
+    )
+    assert repeated.json()["session"]["id"] == payload["session"]["id"]
+
+    detail = client.get(f"/sessions/{payload['session']['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["raw_notes"] == raw
+    assert client.get(f"/jobs/{payload['job']['id']}").status_code == 200
+
+
+def test_missing_project_is_404(client) -> None:
+    import uuid
+
+    response = client.get(f"/projects/{uuid.uuid4()}")
+    assert response.status_code == 404
+</file>
+
 <file path="backend/tests/test_jobs.py">
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -1141,6 +3344,45 @@ async def test_stale_job_at_attempt_limit_fails_definitively(session_factory) ->
         assert job.id not in recovered
         assert job.status == "failed"
         assert "attempt limit" in (job.error or "")
+</file>
+
+<file path="backend/tests/test_note_parser.py">
+from app.services.note_parser import split_note_units
+
+
+def test_uses_lines_when_document_has_no_blank_line() -> None:
+    assert split_note_units(" first \nsecond\n") == [" first ", "second"]
+
+
+def test_preserves_paragraph_text() -> None:
+    assert split_note_units("one\ncontinued\n\ntwo") == ["one\ncontinued", "two"]
+</file>
+
+<file path="backend/tests/test_probe.py">
+from app.services.probe import parse_probe
+
+
+def test_normalizes_ffprobe_payload() -> None:
+    result = parse_probe(
+        {
+            "format": {"duration": "12.5", "format_name": "mov,mp4"},
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "avg_frame_rate": "60000/1001",
+                    "width": 1920,
+                    "height": 1080,
+                },
+                {"codec_type": "audio", "codec_name": "aac"},
+            ],
+        }
+    )
+    assert result.duration_seconds == 12.5
+    assert result.video_codec == "h264"
+    assert result.audio_codec == "aac"
+    assert result.fps == 60000 / 1001
+    assert (result.width, result.height) == (1920, 1080)
 </file>
 
 <file path="backend/tests/test_storage.py">
@@ -1543,263 +3785,100 @@ async def test_transcription_records_are_queryable_without_segments(
         assert loaded.status == "pending"
 </file>
 
-<file path="backend/alembic/versions/0001_initial.py">
-"""Initial domain."""
-from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+<file path="backend/alembic.ini">
+[alembic]
+script_location = alembic
+prepend_sys_path = .
+sqlalchemy.url = postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer
 
-revision = "0001_initial"
-down_revision = None
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    uuid = postgresql.UUID(as_uuid=True)
-    timestamps = [
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-    ]
-    op.create_table("media_projects",
-        sa.Column("id", uuid, primary_key=True), sa.Column("name", sa.String(200), nullable=False),
-        sa.Column("description", sa.Text), *timestamps)
-    op.create_table("media_assets",
-        sa.Column("id", uuid, primary_key=True),
-        sa.Column("project_id", uuid, sa.ForeignKey("media_projects.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("storage_uri", sa.String(1000), nullable=False, unique=True),
-        sa.Column("original_filename", sa.String(500), nullable=False),
-        sa.Column("content_type", sa.String(200)), sa.Column("byte_size", sa.BigInteger, nullable=False),
-        sa.Column("sha256", sa.String(64), nullable=False), sa.Column("duration_seconds", sa.Float),
-        sa.Column("format_name", sa.String(200)), sa.Column("video_codec", sa.String(100)),
-        sa.Column("audio_codec", sa.String(100)), sa.Column("fps", sa.Float),
-        sa.Column("width", sa.Integer), sa.Column("height", sa.Integer),
-        sa.Column("probe_metadata", postgresql.JSONB),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False))
-    op.create_index("ix_media_assets_project_sha256", "media_assets", ["project_id", "sha256"])
-    op.create_table("media_sessions",
-        sa.Column("id", uuid, primary_key=True),
-        sa.Column("project_id", uuid, sa.ForeignKey("media_projects.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("media_id", uuid, sa.ForeignKey("media_assets.id", ondelete="RESTRICT"), nullable=False, unique=True),
-        sa.Column("label", sa.String(200), nullable=False), sa.Column("notes_filename", sa.String(500), nullable=False),
-        sa.Column("raw_notes", sa.Text, nullable=False), sa.Column("status", sa.String(30), nullable=False),
-        sa.Column("idempotency_key", sa.String(200)),
-        *timestamps, sa.UniqueConstraint("project_id", "idempotency_key", name="uq_session_project_idempotency"))
-    op.create_table("notes",
-        sa.Column("id", uuid, primary_key=True),
-        sa.Column("session_id", uuid, sa.ForeignKey("media_sessions.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("order", sa.Integer, nullable=False), sa.Column("raw", sa.Text, nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.UniqueConstraint("session_id", "order", name="uq_note_session_order"))
-    op.create_table("processing_jobs",
-        sa.Column("id", uuid, primary_key=True),
-        sa.Column("project_id", uuid, sa.ForeignKey("media_projects.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("session_id", uuid, sa.ForeignKey("media_sessions.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("media_id", uuid, sa.ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("job_type", sa.String(50), nullable=False), sa.Column("status", sa.String(30), nullable=False),
-        sa.Column("stage", sa.String(100), nullable=False), sa.Column("progress", sa.Float, nullable=False),
-        sa.Column("error", sa.Text), sa.Column("started_at", sa.DateTime(timezone=True)),
-        sa.Column("completed_at", sa.DateTime(timezone=True)), *timestamps)
-    op.create_index("ix_processing_jobs_status_created", "processing_jobs", ["status", "created_at"])
-    op.execute("""CREATE FUNCTION immutable_raw() RETURNS trigger AS $$ BEGIN
-      IF TG_TABLE_NAME = 'notes' AND NEW.raw IS DISTINCT FROM OLD.raw THEN RAISE EXCEPTION 'raw is immutable'; END IF;
-      IF TG_TABLE_NAME = 'media_sessions' AND NEW.raw_notes IS DISTINCT FROM OLD.raw_notes THEN RAISE EXCEPTION 'raw_notes is immutable'; END IF;
-      RETURN NEW; END; $$ LANGUAGE plpgsql;""")
-    op.execute("CREATE TRIGGER note_raw_immutable BEFORE UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION immutable_raw()")
-    op.execute("CREATE TRIGGER document_raw_immutable BEFORE UPDATE ON media_sessions FOR EACH ROW EXECUTE FUNCTION immutable_raw()")
-
-
-def downgrade() -> None:
-    op.execute("DROP FUNCTION IF EXISTS immutable_raw() CASCADE")
-    op.drop_table("processing_jobs")
-    op.drop_table("notes")
-    op.drop_table("media_sessions")
-    op.drop_table("media_assets")
-    op.drop_table("media_projects")
+[loggers]
+keys = root,sqlalchemy,alembic
+[handlers]
+keys = console
+[formatters]
+keys = generic
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
 </file>
 
-<file path="backend/alembic/env.py">
-import asyncio
-from logging.config import fileConfig
-
-from alembic import context
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
-
-from app.core.config import settings
-from app.models import Base
-
-config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
-if config.config_file_name:
-    fileConfig(config.config_file_name)
-target_metadata = Base.metadata
-
-
-def offline() -> None:
-    context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)
-    with context.begin_transaction():
-        context.run_migrations()
-
-
-def sync_migrations(connection: object) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
-    with context.begin_transaction():
-        context.run_migrations()
-
-
-async def online() -> None:
-    engine = async_engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
-    async with engine.connect() as connection:
-        await connection.run_sync(sync_migrations)
-    await engine.dispose()
-
-
-if context.is_offline_mode():
-    offline()
-else:
-    asyncio.run(online())
+<file path="backend/Dockerfile">
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY alembic.ini .
+COPY alembic ./alembic
+COPY app ./app
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
 </file>
 
-<file path="backend/app/api/routers/__init__.py">
+<file path="backend/pyproject.toml">
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic"]
+warn_unused_ignores = false
+</file>
+
+<file path="backend/requirements-dev.txt">
+-r requirements.txt
+aiosqlite==0.20.*
+httpx==0.27.*
+pytest==8.3.*
+pytest-asyncio==0.24.*
+ruff==0.8.*
+mypy==1.13.*
+</file>
+
+<file path="storage/.gitkeep">
 
 </file>
 
-<file path="backend/app/api/routers/jobs.py">
-from uuid import UUID
-
-from fastapi import APIRouter, HTTPException
-
-from app.api.dependencies import DB
-from app.repositories.domain import JobRepository
-from app.schemas.domain import JobOut
-
-router = APIRouter(prefix="/jobs", tags=["jobs"])
-
-
-@router.get("/{job_id}", response_model=JobOut)
-async def get_job(job_id: UUID, db: DB) -> object:
-    item = await JobRepository(db).get(job_id)
-    if item is None:
-        raise HTTPException(404, "Job not found")
-    return item
-</file>
-
-<file path="backend/app/api/routers/projects.py">
-from typing import Annotated
-from uuid import UUID
-
-from fastapi import APIRouter, File, Form, Header, HTTPException, Query, UploadFile
-
-from app.api.dependencies import DB, StorageDep
-from app.repositories.domain import ProjectRepository, SessionRepository
-from app.schemas.domain import ProjectCreate, ProjectOut, SessionIngestOut, SessionSummary
-from app.services.ingestion import IngestionService, InvalidNotesError, ProjectNotFoundError
-from app.workers.runner import job_runner
-
-router = APIRouter(prefix="/projects", tags=["projects"])
-
-
-@router.post("", response_model=ProjectOut, status_code=201)
-async def create_project(payload: ProjectCreate, db: DB) -> object:
-    item = await ProjectRepository(db).create(payload.name, payload.description)
-    await db.commit()
-    await db.refresh(item)
-    return item
-
-
-@router.get("", response_model=list[ProjectOut])
-async def list_projects(
-    db: DB, offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=100)] = 50
-) -> object:
-    return await ProjectRepository(db).list(offset, limit)
-
-
-@router.get("/{project_id}", response_model=ProjectOut)
-async def get_project(project_id: UUID, db: DB) -> object:
-    item = await ProjectRepository(db).get(project_id)
-    if item is None:
-        raise HTTPException(404, "Project not found")
-    return item
-
-
-@router.get("/{project_id}/sessions", response_model=list[SessionSummary])
-async def list_sessions(project_id: UUID, db: DB) -> object:
-    if await ProjectRepository(db).get(project_id) is None:
-        raise HTTPException(404, "Project not found")
-    return await SessionRepository(db).list_for_project(project_id)
-
-
-@router.post("/{project_id}/sessions", response_model=SessionIngestOut, status_code=202)
-async def ingest_session(
-    project_id: UUID,
-    db: DB,
-    storage: StorageDep,
-    label: Annotated[str, Form(min_length=1, max_length=200)],
-    video: Annotated[UploadFile, File()],
-    notes: Annotated[UploadFile, File()],
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=200)] = None,
-) -> object:
-    try:
-        result = await IngestionService(db, storage).ingest(
-            project_id, label, video, notes, idempotency_key
-        )
-    except ProjectNotFoundError as exc:
-        raise HTTPException(404, "Project not found") from exc
-    except InvalidNotesError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    if result.created:
-        job_runner.enqueue(result.job.id)
-    return SessionIngestOut(session=result.session, job=result.job)
-</file>
-
-<file path="backend/app/api/routers/sessions.py">
-from uuid import UUID
-
-from fastapi import APIRouter, HTTPException
-
-from app.api.dependencies import DB
-from app.repositories.domain import SessionRepository
-from app.schemas.domain import SessionOut
-
-router = APIRouter(prefix="/sessions", tags=["sessions"])
-
-
-@router.get("/{session_id}", response_model=SessionOut)
-async def get_session(session_id: UUID, db: DB) -> object:
-    item = await SessionRepository(db).get(session_id)
-    if item is None:
-        raise HTTPException(404, "Session not found")
-    return item
-</file>
-
-<file path="backend/app/api/__init__.py">
-
-</file>
-
-<file path="backend/app/api/dependencies.py">
-from functools import lru_cache
-from typing import Annotated
-
-from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.config import settings
-from app.core.database import get_db
-from app.services.storage import LocalStorage, Storage
-
-
-@lru_cache
-def get_storage() -> Storage:
-    return LocalStorage(settings.storage_root)
-
-
-DB = Annotated[AsyncSession, Depends(get_db)]
-StorageDep = Annotated[Storage, Depends(get_storage)]
-</file>
-
-<file path="backend/app/core/__init__.py">
-
+<file path=".gitignore">
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+storage/*
+!storage/.gitkeep
 </file>
 
 <file path="backend/app/core/config.py">
@@ -1829,6 +3908,17 @@ class Settings(BaseSettings):
     whisper_device: str = "auto"
     whisper_compute_type: str = "auto"
     whisper_language: str = ""
+    ffmpeg_binary: str = "ffmpeg"
+    visual_index_batch_size: int = 25
+    scene_detection_enabled: bool = True
+    scene_detector: str = "ffmpeg_scdet"
+    scene_threshold: float = 10.0
+    representative_frame_interval_seconds: float = 10.0
+    representative_frame_width: int = 640
+    representative_frame_format: str = "jpeg"
+    representative_frame_jpeg_quality: int = 85
+    representative_frame_dedup_tolerance_seconds: float = 0.5
+
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
     whisper_word_timestamps: bool = True
@@ -1842,89 +3932,34 @@ def get_settings() -> Settings:
 settings = get_settings()
 </file>
 
-<file path="backend/app/core/database.py">
-from collections.abc import AsyncIterator
-
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.core.config import settings
-
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-
-
-async def get_db() -> AsyncIterator[AsyncSession]:
-    async with AsyncSessionLocal() as session:
-        yield session
-</file>
-
-<file path="backend/app/core/logging.py">
-import logging
-
-import structlog
-
-
-def configure_logging(level: str) -> None:
-    logging.basicConfig(level=level.upper(), format="%(message)s")
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso", utc=True),
-            structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer(),
-        ],
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
-    )
-</file>
-
 <file path="backend/app/models/__init__.py">
 from app.models.base import Base
 from app.models.entities import (
+    DerivedAsset,
     MediaAsset,
     MediaProject,
     MediaSession,
     Note,
     ProcessingJob,
+    SceneSegment,
     Transcription,
     TranscriptSegment,
+    VisualIndex,
 )
 
 __all__ = [
     "Base",
+    "DerivedAsset",
     "MediaAsset",
     "MediaProject",
     "MediaSession",
     "Note",
     "ProcessingJob",
+    "SceneSegment",
     "TranscriptSegment",
     "Transcription",
+    "VisualIndex",
 ]
-</file>
-
-<file path="backend/app/models/base.py">
-from datetime import datetime
-from uuid import UUID, uuid4
-
-from sqlalchemy import DateTime, Uuid, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class UUIDPrimaryKey:
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-
-
-class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
 </file>
 
 <file path="backend/app/models/entities.py">
@@ -1935,6 +3970,7 @@ from uuid import UUID
 from sqlalchemy import (
     JSON,
     BigInteger,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -2054,6 +4090,90 @@ class TranscriptSegment(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class VisualIndex(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "visual_indexes"
+    __table_args__ = (
+        UniqueConstraint(
+            "media_id", "configuration_fingerprint", name="uq_visual_index_media_config"
+        ),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    detector: Mapped[str] = mapped_column(String(100))
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    tool_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scenes: Mapped[list["SceneSegment"]] = relationship(
+        order_by="SceneSegment.sequence", cascade="all, delete-orphan"
+    )
+    derived_assets: Mapped[list["DerivedAsset"]] = relationship(
+        order_by="DerivedAsset.timestamp_seconds", cascade="all, delete-orphan"
+    )
+
+
+class SceneSegment(Base, UUIDPrimaryKey):
+    __tablename__ = "scene_segments"
+    __table_args__ = (
+        UniqueConstraint("visual_index_id", "sequence", name="uq_scene_visual_index_sequence"),
+        CheckConstraint("start_seconds >= 0", name="ck_scene_start_nonnegative"),
+        CheckConstraint("end_seconds >= start_seconds", name="ck_scene_valid_range"),
+        CheckConstraint("duration_seconds >= 0", name="ck_scene_duration_nonnegative"),
+        Index("ix_scene_segments_visual_start", "visual_index_id", "start_seconds"),
+    )
+    visual_index_id: Mapped[UUID] = mapped_column(
+        ForeignKey("visual_indexes.id", ondelete="CASCADE")
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    duration_seconds: Mapped[float] = mapped_column(Float)
+    detector_score: Mapped[float | None] = mapped_column(Float)
+    segment_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DerivedAsset(Base, UUIDPrimaryKey):
+    __tablename__ = "derived_assets"
+    __table_args__ = (
+        CheckConstraint(
+            "timestamp_seconds IS NULL OR timestamp_seconds >= 0",
+            name="ck_derived_timestamp_nonnegative",
+        ),
+        CheckConstraint(
+            "source_start_seconds IS NULL OR source_start_seconds >= 0",
+            name="ck_derived_source_start_nonnegative",
+        ),
+        CheckConstraint(
+            "source_end_seconds IS NULL OR source_start_seconds IS NULL "
+            "OR source_end_seconds >= source_start_seconds",
+            name="ck_derived_source_valid_range",
+        ),
+        Index("ix_derived_assets_visual_timestamp", "visual_index_id", "timestamp_seconds"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    visual_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(String(100))
+    storage_uri: Mapped[str] = mapped_column(String(1000), unique=True)
+    mime_type: Mapped[str] = mapped_column(String(200))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    timestamp_seconds: Mapped[float | None] = mapped_column(Float)
+    source_start_seconds: Mapped[float | None] = mapped_column(Float)
+    source_end_seconds: Mapped[float | None] = mapped_column(Float)
+    asset_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
     __table_args__ = (Index("ix_processing_jobs_status_created", "status", "created_at"),)
@@ -2062,6 +4182,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
     transcription_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("transcriptions.id", ondelete="CASCADE")
+    )
+    visual_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")
@@ -2073,10 +4196,6 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-</file>
-
-<file path="backend/app/repositories/__init__.py">
-
 </file>
 
 <file path="backend/app/repositories/domain.py">
@@ -2176,6 +4295,15 @@ class JobRepository:
         )
         return result.scalar_one_or_none()
 
+    async def for_visual_index(self, visual_index_id: UUID) -> ProcessingJob | None:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(ProcessingJob.visual_index_id == visual_index_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def recoverable(self, stale_before: datetime) -> Sequence[ProcessingJob]:
         result = await self.db.execute(
             select(ProcessingJob)
@@ -2194,10 +4322,6 @@ class JobRepository:
             .order_by(ProcessingJob.created_at)
         )
         return result.scalars().all()
-</file>
-
-<file path="backend/app/schemas/__init__.py">
-
 </file>
 
 <file path="backend/app/schemas/domain.py">
@@ -2271,6 +4395,7 @@ class JobOut(ORMModel):
     media_id: UUID
     transcription_id: UUID | None
     job_type: str
+    visual_index_id: UUID | None
     status: str
     stage: str
     progress: float
@@ -2287,10 +4412,6 @@ class JobOut(ORMModel):
 class SessionIngestOut(BaseModel):
     session: SessionOut
     job: JobOut
-</file>
-
-<file path="backend/app/services/__init__.py">
-
 </file>
 
 <file path="backend/app/services/ingestion.py">
@@ -2377,6 +4498,9 @@ class IngestionService:
                 status="pending",
             )
             self.db.add_all([media, session])
+            # Establish FK targets before adding notes/jobs that only carry IDs.
+            # This also gives PostgreSQL deterministic flush ordering.
+            await self.db.flush()
             for order, raw in enumerate(split_note_units(raw_notes), start=1):
                 self.db.add(Note(session_id=session_id, order=order, raw=raw))
             job = ProcessingJob(
@@ -2399,105 +4523,6 @@ class IngestionService:
             await self.db.rollback()
             await self.storage.delete(stored.uri)
             raise
-</file>
-
-<file path="backend/app/services/note_parser.py">
-import re
-
-_BLANK_LINE = re.compile(r"\r?\n[ \t]*\r?\n|\r[ \t]*\r")
-
-
-def split_note_units(raw: str) -> list[str]:
-    if not raw:
-        return []
-    if _BLANK_LINE.search(raw):
-        return [part for part in _BLANK_LINE.split(raw) if part.strip()]
-    return [line for line in raw.splitlines() if line.strip()]
-</file>
-
-<file path="backend/app/services/probe.py">
-import asyncio
-import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-
-class ProbeError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class ProbeResult:
-    duration_seconds: float | None
-    format_name: str | None
-    video_codec: str | None
-    audio_codec: str | None
-    fps: float | None
-    width: int | None
-    height: int | None
-    raw: dict[str, Any]
-
-
-class FFprobe:
-    def __init__(self, binary: str = "ffprobe"):
-        self.binary = binary
-
-    async def inspect(self, path: Path) -> ProbeResult:
-        process = await asyncio.create_subprocess_exec(
-            self.binary,
-            "-v",
-            "error",
-            "-show_format",
-            "-show_streams",
-            "-of",
-            "json",
-            str(path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode:
-            raise ProbeError(stderr.decode(errors="replace").strip() or "ffprobe failed")
-        return parse_probe(json.loads(stdout))
-
-
-def _number(value: Any, cast: type[float] | type[int]) -> float | int | None:
-    try:
-        return cast(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _fps(value: Any) -> float | None:
-    try:
-        top, bottom = str(value).split("/", 1)
-        return float(top) / float(bottom) if float(bottom) else None
-    except (TypeError, ValueError):
-        return None
-
-
-def parse_probe(raw: dict[str, Any]) -> ProbeResult:
-    streams = raw.get("streams", [])
-    video: dict[str, Any] = next(
-        (item for item in streams if item.get("codec_type") == "video"), {}
-    )
-    audio: dict[str, Any] = next(
-        (item for item in streams if item.get("codec_type") == "audio"), {}
-    )
-    fmt = raw.get("format", {})
-    width = _number(video.get("width"), int)
-    height = _number(video.get("height"), int)
-    return ProbeResult(
-        duration_seconds=_number(fmt.get("duration"), float),
-        format_name=fmt.get("format_name"),
-        video_codec=video.get("codec_name"),
-        audio_codec=audio.get("codec_name"),
-        fps=_fps(video.get("avg_frame_rate") or video.get("r_frame_rate")),
-        width=width if isinstance(width, int) else None,
-        height=height if isinstance(height, int) else None,
-        raw=raw,
-    )
 </file>
 
 <file path="backend/app/services/processing.py">
@@ -2544,10 +4569,13 @@ class InitialIndexProcessor:
 <file path="backend/app/services/storage.py">
 import asyncio
 import hashlib
+import os
+import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import UploadFile
 
@@ -2563,6 +4591,23 @@ class Storage(Protocol):
     async def save_source(
         self, project_id: UUID, session_id: UUID, upload: UploadFile
     ) -> StoredObject: ...
+    async def save_derived(
+        self,
+        project_id: UUID,
+        session_id: UUID,
+        namespace_kind: str,
+        namespace_id: UUID,
+        collection: str,
+        filename: str,
+        content: bytes,
+    ) -> StoredObject: ...
+    async def delete_derived_namespace(
+        self,
+        project_id: UUID,
+        session_id: UUID,
+        namespace_kind: str,
+        namespace_id: UUID,
+    ) -> None: ...
     def resolve(self, uri: str) -> Path: ...
     async def delete(self, uri: str) -> None: ...
 
@@ -2571,6 +4616,30 @@ def _write_chunk(stream: BinaryIO, digest: Any, chunk: bytes) -> int:
     stream.write(chunk)
     digest.update(chunk)
     return len(chunk)
+
+
+def _safe_component(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value) or value in {".", ".."}:
+        raise ValueError("unsafe storage path component")
+    return value
+
+
+def _write_atomic(target: Path, content: bytes) -> None:
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _delete_tree(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
 
 
 class LocalStorage:
@@ -2614,10 +4683,61 @@ class LocalStorage:
     async def delete(self, uri: str) -> None:
         path = self.resolve(uri)
         await asyncio.to_thread(path.unlink, missing_ok=True)
-</file>
 
-<file path="backend/app/workers/__init__.py">
+    async def save_derived(
+        self,
+        project_id: UUID,
+        session_id: UUID,
+        namespace_kind: str,
+        namespace_id: UUID,
+        collection: str,
+        filename: str,
+        content: bytes,
+    ) -> StoredObject:
+        safe_kind = _safe_component(namespace_kind)
+        safe_collection = _safe_component(collection)
+        safe_filename = _safe_component(filename)
+        relative = PurePosixPath(
+            "projects",
+            str(project_id),
+            "sessions",
+            str(session_id),
+            "derived",
+            safe_kind,
+            str(namespace_id),
+            safe_collection,
+            safe_filename,
+        )
+        target = self.root.joinpath(*relative.parts)
+        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(_write_atomic, target, content)
+        return StoredObject(
+            f"local://{relative.as_posix()}",
+            len(content),
+            hashlib.sha256(content).hexdigest(),
+        )
 
+    async def delete_derived_namespace(
+        self,
+        project_id: UUID,
+        session_id: UUID,
+        namespace_kind: str,
+        namespace_id: UUID,
+    ) -> None:
+        safe_kind = _safe_component(namespace_kind)
+        relative = PurePosixPath(
+            "projects",
+            str(project_id),
+            "sessions",
+            str(session_id),
+            "derived",
+            safe_kind,
+            str(namespace_id),
+        )
+        target = self.root.joinpath(*relative.parts).resolve()
+        if not target.is_relative_to(self.root):
+            raise ValueError("derived namespace escapes root")
+        await asyncio.to_thread(_delete_tree, target)
 </file>
 
 <file path="backend/app/workers/runner.py">
@@ -2636,6 +4756,8 @@ from app.services.processing import InitialIndexProcessor
 from app.services.storage import LocalStorage
 from app.services.transcription import TranscriptionProcessor
 from app.services.transcription_provider import FasterWhisperProvider
+from app.services.visual_index import VisualIndexProcessor
+from app.services.visual_tools import FFmpegFrameExtractor, FFmpegSceneDetector
 
 logger = structlog.get_logger(__name__)
 
@@ -2646,6 +4768,8 @@ def build_default_registry() -> ProcessorRegistry:
         device=settings.whisper_device,
         compute_type=settings.whisper_compute_type,
     )
+    scene_detector = FFmpegSceneDetector(settings.ffmpeg_binary)
+    frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
     registry = ProcessorRegistry()
     registry.register(
         "initial_index",
@@ -2658,6 +4782,16 @@ def build_default_registry() -> ProcessorRegistry:
             storage,
             provider,
             settings.transcription_batch_size,
+        ),
+    )
+    registry.register(
+        "visual_index",
+        lambda db: VisualIndexProcessor(
+            db,
+            storage,
+            scene_detector,
+            frame_extractor,
+            settings.visual_index_batch_size,
         ),
     )
     return registry
@@ -2721,10 +4855,6 @@ class JobRunner:
 job_runner = JobRunner()
 </file>
 
-<file path="backend/app/__init__.py">
-
-</file>
-
 <file path="backend/app/main.py">
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -2734,7 +4864,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.dependencies import DB
-from app.api.routers import jobs, projects, sessions, transcriptions
+from app.api.routers import jobs, projects, sessions, transcriptions, visual_indexes
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.workers.runner import job_runner
@@ -2763,6 +4893,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(projects.router)
     application.include_router(transcriptions.router)
     application.include_router(sessions.router)
+    application.include_router(visual_indexes.router)
     application.include_router(jobs.router)
 
     @application.get("/health", tags=["health"])
@@ -2774,134 +4905,6 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
 
 
 app = create_app()
-</file>
-
-<file path="backend/tests/conftest.py">
-from collections.abc import AsyncIterator
-from pathlib import Path
-
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
-from app.api.dependencies import get_storage
-from app.core.database import get_db
-from app.main import create_app
-from app.models import Base
-from app.services.storage import LocalStorage
-
-
-@pytest.fixture
-async def session_factory():
-    engine = create_async_engine(
-        "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
-
-
-@pytest.fixture
-def client(session_factory, tmp_path: Path):
-    app = create_app(start_worker=False)
-
-    async def database() -> AsyncIterator[AsyncSession]:
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_db] = database
-    app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
-    with TestClient(app) as test_client:
-        yield test_client
-</file>
-
-<file path="backend/tests/test_api.py">
-def test_project_and_session_ingestion_preserve_raw(client) -> None:
-    project = client.post("/projects", json={"name": "Witcher"}).json()
-    raw = " primeira nota  \r\n\r\nsegunda\r\nlinha\r\n"
-    response = client.post(
-        f"/projects/{project['id']}/sessions",
-        data={"label": "001"},
-        files={
-            "video": ("001.mp4", b"fake-video", "video/mp4"),
-            "notes": ("001.txt", raw.encode(), "text/plain"),
-        },
-        headers={"Idempotency-Key": "session-001"},
-    )
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["session"]["raw_notes"] == raw
-    assert [n["raw"] for n in payload["session"]["notes"]] == [
-        " primeira nota  ",
-        "segunda\r\nlinha\r\n",
-    ]
-    assert payload["session"]["media"]["storage_uri"].startswith("local://")
-    assert payload["job"]["status"] == "pending"
-
-    repeated = client.post(
-        f"/projects/{project['id']}/sessions",
-        data={"label": "ignored"},
-        files={
-            "video": ("other.mp4", b"other", "video/mp4"),
-            "notes": ("other.txt", b"other", "text/plain"),
-        },
-        headers={"Idempotency-Key": "session-001"},
-    )
-    assert repeated.json()["session"]["id"] == payload["session"]["id"]
-
-    detail = client.get(f"/sessions/{payload['session']['id']}")
-    assert detail.status_code == 200
-    assert detail.json()["raw_notes"] == raw
-    assert client.get(f"/jobs/{payload['job']['id']}").status_code == 200
-
-
-def test_missing_project_is_404(client) -> None:
-    import uuid
-
-    response = client.get(f"/projects/{uuid.uuid4()}")
-    assert response.status_code == 404
-</file>
-
-<file path="backend/tests/test_note_parser.py">
-from app.services.note_parser import split_note_units
-
-
-def test_uses_lines_when_document_has_no_blank_line() -> None:
-    assert split_note_units(" first \nsecond\n") == [" first ", "second"]
-
-
-def test_preserves_paragraph_text() -> None:
-    assert split_note_units("one\ncontinued\n\ntwo") == ["one\ncontinued", "two"]
-</file>
-
-<file path="backend/tests/test_probe.py">
-from app.services.probe import parse_probe
-
-
-def test_normalizes_ffprobe_payload() -> None:
-    result = parse_probe(
-        {
-            "format": {"duration": "12.5", "format_name": "mov,mp4"},
-            "streams": [
-                {
-                    "codec_type": "video",
-                    "codec_name": "h264",
-                    "avg_frame_rate": "60000/1001",
-                    "width": 1920,
-                    "height": 1080,
-                },
-                {"codec_type": "audio", "codec_name": "aac"},
-            ],
-        }
-    )
-    assert result.duration_seconds == 12.5
-    assert result.video_codec == "h264"
-    assert result.audio_codec == "aac"
-    assert result.fps == 60000 / 1001
-    assert (result.width, result.height) == (1920, 1080)
 </file>
 
 <file path="backend/tests/test_processing.py">
@@ -2968,85 +4971,6 @@ async def test_initial_processing_persists_metadata(session_factory, tmp_path: P
         assert session.status == "ready"
         assert media.duration_seconds == 42.0
         assert media.probe_metadata == {"ok": True}
-</file>
-
-<file path="backend/alembic.ini">
-[alembic]
-script_location = alembic
-prepend_sys_path = .
-sqlalchemy.url = postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer
-
-[loggers]
-keys = root,sqlalchemy,alembic
-[handlers]
-keys = console
-[formatters]
-keys = generic
-[logger_root]
-level = WARN
-handlers = console
-qualname =
-[logger_sqlalchemy]
-level = WARN
-handlers =
-qualname = sqlalchemy.engine
-[logger_alembic]
-level = INFO
-handlers =
-qualname = alembic
-[handler_console]
-class = StreamHandler
-args = (sys.stderr,)
-level = NOTSET
-formatter = generic
-[formatter_generic]
-format = %(levelname)-5.5s [%(name)s] %(message)s
-</file>
-
-<file path="backend/Dockerfile">
-FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY alembic.ini .
-COPY alembic ./alembic
-COPY app ./app
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
-</file>
-
-<file path="backend/pyproject.toml">
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-pythonpath = ["."]
-asyncio_default_fixture_loop_scope = "function"
-
-[tool.ruff]
-target-version = "py312"
-line-length = 100
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC"]
-ignore = ["E501"]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-plugins = ["pydantic.mypy"]
-exclude = ["alembic"]
-warn_unused_ignores = false
-</file>
-
-<file path="backend/requirements-dev.txt">
--r requirements.txt
-aiosqlite==0.20.*
-httpx==0.27.*
-pytest==8.3.*
-pytest-asyncio==0.24.*
-ruff==0.8.*
-mypy==1.13.*
 </file>
 
 <file path="backend/requirements.txt">
@@ -3117,6 +5041,41 @@ only a fully consumed provider stream marks it completed.
 MediaSession.status describes ingestion and basic metadata readiness. Derived
 transcription state lives on Transcription and its ProcessingJob, so ASR failure
 does not make an otherwise usable session failed.
+## Deterministic visual index
+
+POST /sessions/{id}/visual-indexes ensures a VisualIndex and queues a
+visual_index job. SceneDetector and FrameExtractor ports isolate the processor
+from FFmpeg and make normal tests deterministic.
+
+The FFmpeg scdet filter emits cut timestamps and scores. The adapter converts
+them into contiguous SceneSegments starting at zero and ending at the probed
+media duration. Scene detection can be disabled without disabling periodic
+sampling. Representative candidates are the midpoint of every scene plus a
+configurable periodic grid starting at zero.
+
+Scene candidates are generated first. A periodic candidate within the
+configured temporal tolerance is merged into the existing frame and both
+origins are preserved in DerivedAsset metadata. This is temporal deduplication,
+not perceptual hashing. FFmpeg emits one JPEG scaled to the configured width
+with an aspect-ratio-preserving even height.
+
+Storage owns atomic derived writes, checksums, logical URIs and namespace
+deletion. The local layout is:
+
+    projects/{project_id}/sessions/{session_id}/derived/visual/
+      {visual_index_id}/frames/{deterministic_filename}
+
+VisualIndex identity is the unique media_id plus the SHA-256 of its canonical
+detector/configuration JSON. A different configuration creates a new index. At
+each attempt, the processor deletes its managed namespace and all output rows
+before restarting. On failure it repeats that cleanup and leaves MediaSession
+ready. PostgreSQL and the filesystem cannot commit atomically; deterministic
+namespaces and compensating deletion are the explicit single-worker MVP limit.
+
+Migration 0003 also replaces the shared raw-note immutability function with
+JSON field access. PostgreSQL resolves record fields before the table-name
+branch, so the previous NEW.raw/NEW.raw_notes implementation blocked ordinary
+MediaSession status updates. Raw note values remain immutable.
 </file>
 
 <file path="docs/DOMAIN_MODEL.md">
@@ -3156,6 +5115,25 @@ Session status is intentionally coarse: pending covers ingestion and basic
 indexing, ready means source and technical metadata are available, and
 failed means that initial path failed. Transcription uses its own
 pending/processing/completed/failed status and cannot demote a ready session.
+## Visual index and derived assets
+
+- VisualIndex represents one detector/configuration execution over a MediaAsset
+  and owns lifecycle, canonical configuration fingerprint and tool metadata.
+- SceneSegment records ordered numeric offsets, duration, optional detector
+  score and metadata for one VisualIndex.
+- DerivedAsset represents a managed external file, including ownership, kind,
+  storage_uri, MIME, checksum, size, dimensions and optional source offsets.
+- ProcessingJob may point explicitly to a VisualIndex. This mirrors the
+  transcription target without a speculative generic job target.
+
+The unique (media_id, configuration_fingerprint) constraint is the durable
+VisualIndex idempotency boundary. Configuration covers detection settings,
+periodic interval, frame encoding and temporal deduplication tolerance.
+
+Scene and frame collections are paginated and absent from SessionOut. Images
+remain files outside PostgreSQL. representative_frame metadata records
+periodic/scene origins and related scene sequence numbers. VisualIndex owns its
+pending/processing/completed/failed state and cannot demote a ready MediaSession.
 </file>
 
 <file path="docs/ROADMAP.md">
@@ -3175,24 +5153,27 @@ Timestamped local ASR is implemented as an independent durable processing stage:
 - configuration-based idempotency and retry-safe incremental batches;
 - explicit asynchronous API trigger and query endpoints.
 
+Deterministic visual indexing is implemented as another durable stage:
+
+- deterministic FFmpeg scene detection with persisted SceneSegments;
+- periodic and scene-midpoint representative JPEGs with temporal deduplication;
+- VisualIndex configuration fingerprints and independent visual_index jobs;
+- managed, checksummed DerivedAssets with retry-safe compensating cleanup;
+- explicit asynchronous API and paginated scene/frame queries.
+
 ## Planned
 
-1. Scene detection, representative frames and managed derived assets.
-2. Searchable temporal segments, then embeddings and pgvector.
-3. Candidate retrieval for notes and footage.
-4. Provider-neutral multimodal alignment where unmatched is valid.
-5. Consolidated Semantic Timeline export and project/session Media Search.
+1. Searchable temporal segments, then embeddings and pgvector.
+2. Candidate retrieval for notes and footage.
+3. Provider-neutral multimodal alignment where unmatched is valid.
+4. Consolidated Semantic Timeline export and project/session Media Search.
 
 Editorial work stays in Ideas Hub; voice, planning, composition and rendering
 stay in production services.
 
-There is still no scene detection, representative-frame extraction, embeddings,
-pgvector, semantic search, candidate retrieval, Gemini alignment or consolidated
-Semantic Timeline.
-</file>
-
-<file path="storage/.gitkeep">
-
+There are still no embeddings, pgvector, semantic search, candidate retrieval,
+OCR, image captioning, Gemini alignment, multimodal understanding or
+consolidated Semantic Timeline.
 </file>
 
 <file path=".env.example">
@@ -3217,19 +5198,16 @@ WHISPER_LANGUAGE=
 WHISPER_BEAM_SIZE=5
 WHISPER_VAD_FILTER=true
 WHISPER_WORD_TIMESTAMPS=true
-</file>
-
-<file path=".gitignore">
-.env
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-storage/*
-!storage/.gitkeep
+FFMPEG_BINARY=ffmpeg
+VISUAL_INDEX_BATCH_SIZE=25
+SCENE_DETECTION_ENABLED=true
+SCENE_DETECTOR=ffmpeg_scdet
+SCENE_THRESHOLD=10.0
+REPRESENTATIVE_FRAME_INTERVAL_SECONDS=10.0
+REPRESENTATIVE_FRAME_WIDTH=640
+REPRESENTATIVE_FRAME_FORMAT=jpeg
+REPRESENTATIVE_FRAME_JPEG_QUALITY=85
+REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS=0.5
 </file>
 
 <file path="AGENTS.md">
@@ -3254,9 +5232,14 @@ Keep it as an independent ProcessingJob and Transcription aggregate; do not fold
 it into InitialIndexProcessor. Transcription failures must not invalidate a
 ready MediaSession. Tests use fake providers and must never download a model.
 
-The next roadmap phase may add scene-derived assets, but scene detection,
-embeddings, pgvector, semantic retrieval, Gemini alignment and editorial logic
-are not part of the current implementation.
+Deterministic visual indexing is now an active implemented roadmap phase. Keep
+VisualIndex as an independent ProcessingJob aggregate. SceneSegment stores
+temporal structure and DerivedAsset owns managed representative-frame files.
+Tests use fake scene/frame tools; only smoke tests may require real FFmpeg.
+
+The next roadmap phase is searchable temporal segments plus embeddings and
+pgvector. Semantic retrieval, Gemini alignment and editorial logic are not part
+of the current implementation.
 </file>
 
 <file path="docker-compose.yml">
@@ -3298,6 +5281,16 @@ services:
       WHISPER_WORD_TIMESTAMPS: ${WHISPER_WORD_TIMESTAMPS:-true}
       HF_HOME: /data/models/huggingface
       FFPROBE_BINARY: ${FFPROBE_BINARY:-ffprobe}
+      FFMPEG_BINARY: ${FFMPEG_BINARY:-ffmpeg}
+      VISUAL_INDEX_BATCH_SIZE: ${VISUAL_INDEX_BATCH_SIZE:-25}
+      SCENE_DETECTION_ENABLED: ${SCENE_DETECTION_ENABLED:-true}
+      SCENE_DETECTOR: ${SCENE_DETECTOR:-ffmpeg_scdet}
+      SCENE_THRESHOLD: ${SCENE_THRESHOLD:-10.0}
+      REPRESENTATIVE_FRAME_INTERVAL_SECONDS: ${REPRESENTATIVE_FRAME_INTERVAL_SECONDS:-10.0}
+      REPRESENTATIVE_FRAME_WIDTH: ${REPRESENTATIVE_FRAME_WIDTH:-640}
+      REPRESENTATIVE_FRAME_FORMAT: ${REPRESENTATIVE_FRAME_FORMAT:-jpeg}
+      REPRESENTATIVE_FRAME_JPEG_QUALITY: ${REPRESENTATIVE_FRAME_JPEG_QUALITY:-85}
+      REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS: ${REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS:-0.5}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports: ["${API_PORT:-8012}:8000"]
     volumes:
@@ -3313,6 +5306,9 @@ volumes:
 
 <file path="README.md">
 # Media Indexer
+Also owns durable timestamped ASR and deterministic visual indexing as
+independent processing stages.
+
 
 Camada de entendimento e memória audiovisual do NeoVids. Registra projetos e
 sessões, preserva notas brutas, armazena mídias por identidade lógica e extrai
@@ -3368,6 +5364,45 @@ transcription's partial segments before restarting so sequence numbers cannot
 be duplicated. A transcription failure does not change a ready MediaSession to
 failed.
 
+## Visual indexing
+
+After a session is ready, request a visual index without running FFmpeg in the
+HTTP request:
+
+    curl -X POST "http://localhost:8012/sessions/$SESSION_ID/visual-indexes" \
+      -H 'Content-Type: application/json' \
+      -d '{"periodic_frame_interval_seconds":10,"frame_width":640}'
+
+The HTTP 202 response contains the VisualIndex and its ProcessingJob. Query
+metadata without loading image bytes:
+
+    GET /sessions/{session_id}/visual-indexes
+    GET /visual-indexes/{visual_index_id}
+    GET /visual-indexes/{visual_index_id}/scenes?offset=0&limit=100
+    GET /visual-indexes/{visual_index_id}/frames?offset=0&limit=100
+
+FFmpeg scdet creates contiguous SceneSegments. Representative JPEGs combine
+periodic timestamps with scene midpoints; scene candidates take precedence and
+timestamps closer than the configured tolerance are merged, retaining all
+origins in asset metadata. Frames preserve aspect ratio at a compact width.
+
+Derived files are stored under the visual index namespace and exposed only as
+storage_uri values. Equivalent media/configuration requests reuse one
+VisualIndex and job. Retry removes that index's scene rows, derived rows and
+managed files before starting again. Filesystem/database cleanup is
+compensating, not a distributed transaction.
+
+Visual settings:
+
+    SCENE_DETECTION_ENABLED=true
+    SCENE_DETECTOR=ffmpeg_scdet
+    SCENE_THRESHOLD=10.0
+    REPRESENTATIVE_FRAME_INTERVAL_SECONDS=10.0
+    REPRESENTATIVE_FRAME_WIDTH=640
+    REPRESENTATIVE_FRAME_FORMAT=jpeg
+    REPRESENTATIVE_FRAME_JPEG_QUALITY=85
+    REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS=0.5
+
 ## Long-running jobs
 
 Processing jobs record heartbeat_at, attempt_count and max_attempts. On startup,
@@ -3394,6 +5429,15 @@ reports an available CUDA device, otherwise CPU. The default Docker image is
 CPU-ready; CUDA operation also requires a GPU-enabled runtime and compatible
 host CUDA/cuDNN libraries. Model files use the Hugging Face cache mounted at
 /data/models in Docker.
+
+## Real visual smoke
+
+Generate a short hard-cut source with FFmpeg (for example, concatenate two-second
+red, blue and green color clips), ingest it through the normal session endpoint,
+wait for initial_index, then POST a visual index with scene_threshold=8 and a
+two-second periodic interval. Poll its job and inspect the scene/frame endpoints.
+Verify each local:// URI under STORAGE_ROOT with sha256sum and ffprobe. No media
+fixture is committed and this smoke is intentionally outside normal pytest.
 </file>
 
 </files>

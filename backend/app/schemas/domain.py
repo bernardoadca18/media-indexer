@@ -68,6 +68,7 @@ class JobOut(ORMModel):
     media_id: UUID
     transcription_id: UUID | None
     job_type: str
+    visual_index_id: UUID | None
     status: str
     stage: str
     progress: float

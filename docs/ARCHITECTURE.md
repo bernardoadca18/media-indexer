@@ -52,3 +52,38 @@ only a fully consumed provider stream marks it completed.
 MediaSession.status describes ingestion and basic metadata readiness. Derived
 transcription state lives on Transcription and its ProcessingJob, so ASR failure
 does not make an otherwise usable session failed.
+## Deterministic visual index
+
+POST /sessions/{id}/visual-indexes ensures a VisualIndex and queues a
+visual_index job. SceneDetector and FrameExtractor ports isolate the processor
+from FFmpeg and make normal tests deterministic.
+
+The FFmpeg scdet filter emits cut timestamps and scores. The adapter converts
+them into contiguous SceneSegments starting at zero and ending at the probed
+media duration. Scene detection can be disabled without disabling periodic
+sampling. Representative candidates are the midpoint of every scene plus a
+configurable periodic grid starting at zero.
+
+Scene candidates are generated first. A periodic candidate within the
+configured temporal tolerance is merged into the existing frame and both
+origins are preserved in DerivedAsset metadata. This is temporal deduplication,
+not perceptual hashing. FFmpeg emits one JPEG scaled to the configured width
+with an aspect-ratio-preserving even height.
+
+Storage owns atomic derived writes, checksums, logical URIs and namespace
+deletion. The local layout is:
+
+    projects/{project_id}/sessions/{session_id}/derived/visual/
+      {visual_index_id}/frames/{deterministic_filename}
+
+VisualIndex identity is the unique media_id plus the SHA-256 of its canonical
+detector/configuration JSON. A different configuration creates a new index. At
+each attempt, the processor deletes its managed namespace and all output rows
+before restarting. On failure it repeats that cleanup and leaves MediaSession
+ready. PostgreSQL and the filesystem cannot commit atomically; deterministic
+namespaces and compensating deletion are the explicit single-worker MVP limit.
+
+Migration 0003 also replaces the shared raw-note immutability function with
+JSON field access. PostgreSQL resolves record fields before the table-name
+branch, so the previous NEW.raw/NEW.raw_notes implementation blocked ordinary
+MediaSession status updates. Raw note values remain immutable.

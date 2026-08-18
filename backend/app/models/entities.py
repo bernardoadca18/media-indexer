@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import (
     JSON,
     BigInteger,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -124,6 +125,90 @@ class TranscriptSegment(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class VisualIndex(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "visual_indexes"
+    __table_args__ = (
+        UniqueConstraint(
+            "media_id", "configuration_fingerprint", name="uq_visual_index_media_config"
+        ),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    detector: Mapped[str] = mapped_column(String(100))
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    tool_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scenes: Mapped[list["SceneSegment"]] = relationship(
+        order_by="SceneSegment.sequence", cascade="all, delete-orphan"
+    )
+    derived_assets: Mapped[list["DerivedAsset"]] = relationship(
+        order_by="DerivedAsset.timestamp_seconds", cascade="all, delete-orphan"
+    )
+
+
+class SceneSegment(Base, UUIDPrimaryKey):
+    __tablename__ = "scene_segments"
+    __table_args__ = (
+        UniqueConstraint("visual_index_id", "sequence", name="uq_scene_visual_index_sequence"),
+        CheckConstraint("start_seconds >= 0", name="ck_scene_start_nonnegative"),
+        CheckConstraint("end_seconds >= start_seconds", name="ck_scene_valid_range"),
+        CheckConstraint("duration_seconds >= 0", name="ck_scene_duration_nonnegative"),
+        Index("ix_scene_segments_visual_start", "visual_index_id", "start_seconds"),
+    )
+    visual_index_id: Mapped[UUID] = mapped_column(
+        ForeignKey("visual_indexes.id", ondelete="CASCADE")
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    duration_seconds: Mapped[float] = mapped_column(Float)
+    detector_score: Mapped[float | None] = mapped_column(Float)
+    segment_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DerivedAsset(Base, UUIDPrimaryKey):
+    __tablename__ = "derived_assets"
+    __table_args__ = (
+        CheckConstraint(
+            "timestamp_seconds IS NULL OR timestamp_seconds >= 0",
+            name="ck_derived_timestamp_nonnegative",
+        ),
+        CheckConstraint(
+            "source_start_seconds IS NULL OR source_start_seconds >= 0",
+            name="ck_derived_source_start_nonnegative",
+        ),
+        CheckConstraint(
+            "source_end_seconds IS NULL OR source_start_seconds IS NULL "
+            "OR source_end_seconds >= source_start_seconds",
+            name="ck_derived_source_valid_range",
+        ),
+        Index("ix_derived_assets_visual_timestamp", "visual_index_id", "timestamp_seconds"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    visual_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(String(100))
+    storage_uri: Mapped[str] = mapped_column(String(1000), unique=True)
+    mime_type: Mapped[str] = mapped_column(String(200))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    timestamp_seconds: Mapped[float | None] = mapped_column(Float)
+    source_start_seconds: Mapped[float | None] = mapped_column(Float)
+    source_end_seconds: Mapped[float | None] = mapped_column(Float)
+    asset_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
     __table_args__ = (Index("ix_processing_jobs_status_created", "status", "created_at"),)
@@ -132,6 +217,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
     transcription_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("transcriptions.id", ondelete="CASCADE")
+    )
+    visual_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")
