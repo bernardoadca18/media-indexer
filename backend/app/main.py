@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.dependencies import DB
-from app.api.routers import jobs, projects, sessions
+from app.api.routers import jobs, projects, sessions, transcriptions
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.workers.runner import job_runner
@@ -33,6 +33,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.include_router(projects.router)
+    application.include_router(transcriptions.router)
     application.include_router(sessions.router)
     application.include_router(jobs.router)
 

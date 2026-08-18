@@ -1,11 +1,7 @@
-from datetime import UTC, datetime
-from uuid import UUID
-
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaAsset, MediaSession
-from app.repositories.domain import JobRepository
+from app.models import MediaAsset, MediaSession, ProcessingJob
 from app.services.probe import FFprobe
 from app.services.storage import Storage
 
@@ -16,13 +12,8 @@ class InitialIndexProcessor:
     def __init__(self, db: AsyncSession, storage: Storage, probe: FFprobe):
         self.db, self.storage, self.probe = db, storage, probe
 
-    async def run(self, job_id: UUID) -> None:
-        repo = JobRepository(self.db)
-        job = await repo.get(job_id)
-        if job is None or job.status == "completed":
-            return
-        job.status, job.stage, job.progress = "processing", "ffprobe", 0.25
-        job.started_at, job.error = datetime.now(UTC), None
+    async def run(self, job: ProcessingJob) -> None:
+        job.stage, job.progress = "ffprobe", 0.25
         await self.db.commit()
         try:
             media = await self.db.get(MediaAsset, job.media_id)
@@ -36,19 +27,12 @@ class InitialIndexProcessor:
             media.fps, media.width, media.height = result.fps, result.width, result.height
             media.probe_metadata = result.raw
             session.status = "ready"
-            job.status, job.stage, job.progress = "completed", "completed", 1.0
-            job.completed_at = datetime.now(UTC)
             await self.db.commit()
-            logger.info("job_completed", job_id=str(job.id), session_id=str(job.session_id))
-        except Exception as exc:
+        except Exception:
             await self.db.rollback()
-            job = await repo.get(job_id)
-            if job is not None:
-                session = await self.db.get(MediaSession, job.session_id)
-                job.status, job.stage, job.error = "failed", "ffprobe", str(exc)[:4000]
-                job.completed_at = datetime.now(UTC)
-                if session is not None:
-                    session.status = "failed"
+            session = await self.db.get(MediaSession, job.session_id)
+            if session is not None:
+                session.status = "failed"
                 await self.db.commit()
-            logger.exception("job_failed", job_id=str(job_id))
+            logger.exception("initial_index_failed", job_id=str(job.id))
             raise

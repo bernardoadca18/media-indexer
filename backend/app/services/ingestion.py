@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models import MediaAsset, MediaSession, Note, ProcessingJob
 from app.repositories.domain import JobRepository, ProjectRepository, SessionRepository
 from app.services.note_parser import split_note_units
@@ -83,6 +84,7 @@ class IngestionService:
             for order, raw in enumerate(split_note_units(raw_notes), start=1):
                 self.db.add(Note(session_id=session_id, order=order, raw=raw))
             job = ProcessingJob(
+                max_attempts=settings.job_max_attempts,
                 project_id=project_id,
                 session_id=session_id,
                 media_id=media_id,

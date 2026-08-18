@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.models import MediaAsset, MediaProject, MediaSession, ProcessingJob
+from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import ProbeResult
 from app.services.processing import InitialIndexProcessor
 from app.services.storage import LocalStorage
@@ -45,7 +46,14 @@ async def test_initial_processing_persists_metadata(session_factory, tmp_path: P
         db.add(job)
         await db.commit()
 
-        await InitialIndexProcessor(db, storage, FakeProbe()).run(job.id)
+        registry = ProcessorRegistry(
+            {
+                "initial_index": lambda current_db: InitialIndexProcessor(
+                    current_db, storage, FakeProbe()
+                )
+            }
+        )
+        assert await JobExecutor(db, registry).execute(job.id)
         await db.refresh(job)
         await db.refresh(media)
         await db.refresh(session)

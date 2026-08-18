@@ -1,7 +1,8 @@
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Any, BinaryIO, Protocol
 from uuid import UUID
 
 from fastapi import UploadFile
@@ -22,6 +23,12 @@ class Storage(Protocol):
     async def delete(self, uri: str) -> None: ...
 
 
+def _write_chunk(stream: BinaryIO, digest: Any, chunk: bytes) -> int:
+    stream.write(chunk)
+    digest.update(chunk)
+    return len(chunk)
+
+
 class LocalStorage:
     def __init__(self, root: Path):
         self.root = root.resolve()
@@ -29,19 +36,27 @@ class LocalStorage:
     async def save_source(
         self, project_id: UUID, session_id: UUID, upload: UploadFile
     ) -> StoredObject:
-        filename = Path(upload.filename or "source.bin").name
+        supplied = (upload.filename or "source.bin").replace("\\", "/")
+        filename = supplied.rsplit("/", 1)[-1] or "source.bin"
+        if filename in {".", ".."}:
+            filename = "source.bin"
         relative = PurePosixPath(
             "projects", str(project_id), "sessions", str(session_id), "source", filename
         )
         target = self.root.joinpath(*relative.parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
         digest = hashlib.sha256()
         size = 0
-        with target.open("wb") as stream:
+        stream = await asyncio.to_thread(target.open, "wb")
+        try:
             while chunk := await upload.read(1024 * 1024):
-                stream.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
+                size += await asyncio.to_thread(_write_chunk, stream, digest, chunk)
+        except Exception:
+            await asyncio.to_thread(stream.close)
+            await asyncio.to_thread(target.unlink, missing_ok=True)
+            raise
+        else:
+            await asyncio.to_thread(stream.close)
         return StoredObject(f"local://{relative.as_posix()}", size, digest.hexdigest())
 
     def resolve(self, uri: str) -> Path:
@@ -54,4 +69,4 @@ class LocalStorage:
 
     async def delete(self, uri: str) -> None:
         path = self.resolve(uri)
-        path.unlink(missing_ok=True)
+        await asyncio.to_thread(path.unlink, missing_ok=True)

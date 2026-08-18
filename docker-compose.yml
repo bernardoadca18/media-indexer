@@ -23,12 +23,27 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://media_indexer:media_indexer@db:5432/media_indexer}
       STORAGE_ROOT: ${STORAGE_ROOT:-/data/storage}
       WORKER_ENABLED: ${WORKER_ENABLED:-true}
+      JOB_STALE_TIMEOUT_SECONDS: ${JOB_STALE_TIMEOUT_SECONDS:-300}
+      JOB_HEARTBEAT_INTERVAL_SECONDS: ${JOB_HEARTBEAT_INTERVAL_SECONDS:-30}
+      JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
+      TRANSCRIPTION_BATCH_SIZE: ${TRANSCRIPTION_BATCH_SIZE:-25}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-auto}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-auto}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
+      WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-5}
+      WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-true}
+      WHISPER_WORD_TIMESTAMPS: ${WHISPER_WORD_TIMESTAMPS:-true}
+      HF_HOME: /data/models/huggingface
       FFPROBE_BINARY: ${FFPROBE_BINARY:-ffprobe}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports: ["${API_PORT:-8012}:8000"]
-    volumes: ["./storage:/data/storage"]
+    volumes:
+      - "./storage:/data/storage"
+      - "media-indexer-model-cache:/data/models"
     depends_on:
       db:
         condition: service_healthy
 volumes:
   media-indexer-db-data:
+  media-indexer-model-cache:

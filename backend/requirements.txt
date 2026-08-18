@@ -7,3 +7,4 @@ pydantic==2.9.*
 pydantic-settings==2.6.*
 python-multipart==0.0.20
 structlog==24.4.*
+faster-whisper==1.2.*

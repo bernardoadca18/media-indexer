@@ -13,3 +13,12 @@ and URIs, not host paths. Keep heavy work out of HTTP and persist job state.
 Store large files outside PostgreSQL and add migrations for schema changes.
 Do not add editorial logic, LLMs, transcription, rendering or broker
 infrastructure before a concrete roadmap phase requires them.
+
+Timestamped local transcription is now an active implemented roadmap phase.
+Keep it as an independent ProcessingJob and Transcription aggregate; do not fold
+it into InitialIndexProcessor. Transcription failures must not invalidate a
+ready MediaSession. Tests use fake providers and must never download a model.
+
+The next roadmap phase may add scene-derived assets, but scene detection,
+embeddings, pgvector, semantic retrieval, Gemini alignment and editorial logic
+are not part of the current implementation.

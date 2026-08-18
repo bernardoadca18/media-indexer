@@ -66,10 +66,14 @@ class JobOut(ORMModel):
     project_id: UUID
     session_id: UUID
     media_id: UUID
+    transcription_id: UUID | None
     job_type: str
     status: str
     stage: str
     progress: float
+    heartbeat_at: datetime | None
+    attempt_count: int
+    max_attempts: int
     error: str | None
     started_at: datetime | None
     completed_at: datetime | None

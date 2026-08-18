@@ -1,7 +1,8 @@
 from collections.abc import Sequence
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -80,6 +81,34 @@ class JobRepository:
         result = await self.db.execute(
             select(ProcessingJob.id)
             .where(ProcessingJob.status == "pending")
+            .order_by(ProcessingJob.created_at)
+        )
+        return result.scalars().all()
+
+    async def for_transcription(self, transcription_id: UUID) -> ProcessingJob | None:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(ProcessingJob.transcription_id == transcription_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def recoverable(self, stale_before: datetime) -> Sequence[ProcessingJob]:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(
+                or_(
+                    ProcessingJob.status == "pending",
+                    (
+                        (ProcessingJob.status == "processing")
+                        & (
+                            ProcessingJob.heartbeat_at.is_(None)
+                            | (ProcessingJob.heartbeat_at < stale_before)
+                        )
+                    ),
+                )
+            )
             .order_by(ProcessingJob.created_at)
         )
         return result.scalars().all()
