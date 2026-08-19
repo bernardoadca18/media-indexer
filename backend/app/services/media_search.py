@@ -29,35 +29,30 @@ KEY DESIGN DECISIONS
 """
 
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MediaAsset, MediaSession
-from app.repositories.temporal_index import TemporalSearchHit
 from app.schemas.media_search import (
-    MediaSearchResponse,
     MediaSearchRequest,
+    MediaSearchResponse,
     MediaSearchResult,
     MediaSearchSessionSummary,
-    TemporalIndexResolution,
 )
 from app.services.candidate_retrieval import (
     CandidateDefinition,
-    CandidateRetriever,
     CandidateRetrievalConfig,
+    CandidateRetriever,
     RetrievalSubject,
     build_candidate_definitions,
 )
 from app.services.embedding_provider import EmbeddingProvider
-from app.services.temporal_index import TemporalSearchService
 from app.services.temporal_index_resolution import (
     ResolvedTemporalIndex,
     TemporalIndexResolutionError,
     TemporalIndexResolutionService,
-    compute_compatibility_signature,
 )
 
 logger = structlog.get_logger(__name__)
@@ -225,9 +220,7 @@ class MediaSearchService:
         # Validate time range filter
         if request.start_seconds is not None and request.end_seconds is not None:
             if request.end_seconds <= request.start_seconds:
-                raise MediaSearchQueryError(
-                    "end_seconds must be greater than start_seconds"
-                )
+                raise MediaSearchQueryError("end_seconds must be greater than start_seconds")
 
         # Resolve temporal index
         try:
@@ -648,7 +641,7 @@ class MediaSearchService:
         if not segments:
             return None
 
-        texts = [seg["text"] for seg in segments if seg["text"]]
+        texts = [seg.text for seg in segments if seg.text]
         if not texts:
             return None
 
@@ -665,7 +658,5 @@ class MediaSearchService:
         """Load multiple sessions by ID."""
         from sqlalchemy import select
 
-        result = await self.db.execute(
-            select(MediaSession).where(MediaSession.id.in_(session_ids))
-        )
+        result = await self.db.execute(select(MediaSession).where(MediaSession.id.in_(session_ids)))
         return {session.id: session for session in result.scalars().all()}

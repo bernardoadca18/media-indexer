@@ -58,7 +58,7 @@ async def search_session(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
-        )
+        ) from None
     except MediaSearchError as e:
         # Distinguish between different error types
         error_message = str(e).lower()
@@ -67,12 +67,12 @@ async def search_session(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(e),
-            )
+            ) from None
 
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
-        )
+        ) from None
 
 
 @router.post(
@@ -117,7 +117,7 @@ async def search_project(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
-        )
+        ) from None
     except MediaSearchError as e:
         error_message = str(e).lower()
 
@@ -125,9 +125,9 @@ async def search_project(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(e),
-            )
+            ) from None
 
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
-        )
+        ) from None

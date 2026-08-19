@@ -48,6 +48,48 @@ def validate_embeddings(
     return validated
 
 
+class FakeEmbeddingProvider:
+    """Deterministic fake embedding provider for testing."""
+
+    def __init__(
+        self,
+        *,
+        name: str = "fake",
+        dimensions: int = 1024,
+        fail: bool = False,
+    ):
+        self._name = name
+        self.dimensions = dimensions
+        self.fail = fail
+        self.batches: list[list[str]] = []
+        self.embed_call_count = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        model: str,
+        expected_dimensions: int,
+    ) -> list[list[float]]:
+        self.batches.append(list(texts))
+        self.embed_call_count += 1
+        if self.fail:
+            raise EmbeddingProviderError("fake provider failure")
+        if expected_dimensions != self.dimensions:
+            raise EmbeddingDimensionError(
+                f"expected {expected_dimensions} dimensions; got {self.dimensions}"
+            )
+        return [[float(index + 1)] + [0.0] * (self.dimensions - 1) for index, _ in enumerate(texts)]
+
+    def fake_embedding(self, index: int) -> list[float]:
+        """Generate a deterministic fake embedding for test setup."""
+        return [float(index)] + [0.0] * (self.dimensions - 1)
+
+
 class LiteLLMEmbeddingProvider:
     name = "litellm"
 

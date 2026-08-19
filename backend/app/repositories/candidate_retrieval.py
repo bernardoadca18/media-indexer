@@ -81,9 +81,7 @@ class CandidateRetrievalRepository:
         )
         await self.db.execute(
             delete(RetrievalCandidateTemporalSegment).where(
-                RetrievalCandidateTemporalSegment.retrieval_candidate_id.in_(
-                    candidate_ids
-                )
+                RetrievalCandidateTemporalSegment.retrieval_candidate_id.in_(candidate_ids)
             )
         )
         await self.db.execute(
@@ -112,19 +110,12 @@ class CandidateRetrievalRepository:
             )
             .join(
                 RetrievalCandidateTemporalSegment,
-                RetrievalCandidateTemporalSegment.temporal_segment_id
-                == TemporalSegment.id,
+                RetrievalCandidateTemporalSegment.temporal_segment_id == TemporalSegment.id,
             )
-            .where(
-                RetrievalCandidateTemporalSegment.retrieval_candidate_id
-                == candidate.id
-            )
+            .where(RetrievalCandidateTemporalSegment.retrieval_candidate_id == candidate.id)
             .order_by(RetrievalCandidateTemporalSegment.hit_rank)
         )
-        hits = [
-            CandidateHitRecord(row[0], float(row[1]), int(row[2]))
-            for row in hit_rows.all()
-        ]
+        hits = [CandidateHitRecord(row[0], float(row[1]), int(row[2])) for row in hit_rows.all()]
         segment_result = await self.db.execute(
             select(TemporalSegment)
             .where(
@@ -137,8 +128,7 @@ class CandidateRetrievalRepository:
         transcript_result = await self.db.execute(
             select(TranscriptSegment)
             .where(
-                TranscriptSegment.transcription_id
-                == temporal_index.transcription_id,
+                TranscriptSegment.transcription_id == temporal_index.transcription_id,
                 TranscriptSegment.end_seconds > candidate.start_seconds,
                 TranscriptSegment.start_seconds < candidate.end_seconds,
             )

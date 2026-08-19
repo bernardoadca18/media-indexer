@@ -52,10 +52,7 @@ class FakeEmbeddingProvider:
         self.batches.append(list(texts))
         if self.fail:
             raise RuntimeError("embedding provider interrupted")
-        return [
-            [float(index + 1)] + [0.0] * (self.dimensions - 1)
-            for index, _ in enumerate(texts)
-        ]
+        return [[float(index + 1)] + [0.0] * (self.dimensions - 1) for index, _ in enumerate(texts)]
 
 
 async def seed_ready_prerequisites(db):
@@ -380,6 +377,8 @@ async def test_stale_temporal_job_recovery_preserves_ready_session(session_facto
         assert result.temporal_index.status == "pending"
         assert session.status == "ready"
 
+
+@pytest.mark.postgres
 async def test_query_dimension_mismatch_fails_before_similarity(session_factory) -> None:
     async with session_factory() as db:
         session, transcription, visual_index, _, _, _ = await seed_ready_prerequisites(db)
@@ -397,4 +396,3 @@ async def test_query_dimension_mismatch_fails_before_similarity(session_factory)
                 db,
                 FakeEmbeddingProvider(dimensions=7),
             ).search(result.temporal_index.id, "protect the laboratory", 5)
-

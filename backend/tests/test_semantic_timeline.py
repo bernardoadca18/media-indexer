@@ -267,9 +267,7 @@ async def seed_timeline(db):
         observation=notes[2].raw,
         status="no_candidates",
     )
-    db.add_all(
-        [matched_subject, unmatched_subject, no_candidates_subject]
-    )
+    db.add_all([matched_subject, unmatched_subject, no_candidates_subject])
     await db.flush()
     selected = CandidateAlignment(
         alignment_run_id=alignment.id,
@@ -347,20 +345,14 @@ async def test_projection_with_alignment_preserves_provenance_and_raw(
         assert (selected.start_seconds, selected.end_seconds) == (25.0, 65.0)
         assert selected.confidence == 0.93
         assert selected.anchors[0]["timestamp_seconds"] == 42.0
-        assert selected.temporal_segment_ids == [
-            segment.id for segment in domain["segments"][:3]
-        ]
+        assert selected.temporal_segment_ids == [segment.id for segment in domain["segments"][:3]]
         assert domain["notes"][0].id in result.items[0].matched_note_ids
         assert domain["selected"].id in result.items[2].selected_alignment_ids
         assert result.provenance.alignment is not None
         assert (
-            result.provenance.transcription.transcription_id
-            == domain["temporal"].transcription_id
+            result.provenance.transcription.transcription_id == domain["temporal"].transcription_id
         )
-        assert (
-            result.provenance.visual_index.visual_index_id
-            == domain["temporal"].visual_index_id
-        )
+        assert result.provenance.visual_index.visual_index_id == domain["temporal"].visual_index_id
         frame = result.items[0].evidence.frames[0]
         assert frame.storage_uri.startswith("local://")
         serialized = result.model_dump_json()
@@ -387,9 +379,7 @@ async def test_projection_without_alignment_is_explicit_and_paginated(
         assert result.offset == 1 and result.limit == 2
         assert [item.sequence for item in result.items] == [2, 3]
         assert result.provenance.alignment is None
-        assert all(
-            note.alignment_status == "not_aligned" for note in result.notes
-        )
+        assert all(note.alignment_status == "not_aligned" for note in result.notes)
         assert all(note.selected_alignment is None for note in result.notes)
 
 

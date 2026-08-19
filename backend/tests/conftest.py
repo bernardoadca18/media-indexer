@@ -1,3 +1,9 @@
+"""Test configuration and shared fixtures.
+
+Default fixtures use SQLite for unit tests.
+For PostgreSQL integration tests, use @pytest.mark.postgres and request
+postgres_session_factory/postgres_db/postgres_client fixtures explicitly.
+"""
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -15,6 +21,7 @@ from app.services.storage import LocalStorage
 
 @pytest.fixture
 async def session_factory():
+    """SQLite session factory for unit tests."""
     engine = create_async_engine(
         "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -26,7 +33,15 @@ async def session_factory():
 
 
 @pytest.fixture
+async def db(session_factory) -> AsyncIterator[AsyncSession]:
+    """SQLite database session for unit tests."""
+    async with session_factory() as session:
+        yield session
+
+
+@pytest.fixture
 def client(session_factory, tmp_path: Path):
+    """TestClient with SQLite backend for unit tests."""
     app = create_app(start_worker=False)
 
     async def database() -> AsyncIterator[AsyncSession]:
@@ -37,3 +52,7 @@ def client(session_factory, tmp_path: Path):
     app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
     with TestClient(app) as test_client:
         yield test_client
+
+
+# Import PostgreSQL fixtures so they're available to all tests
+pytest_plugins = ["tests.conftest_postgres"]

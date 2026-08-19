@@ -570,13 +570,9 @@ class TemporalSearchService:
         if temporal_index is None:
             raise LookupError("temporal index not found")
         if temporal_index.status != "completed":
-            raise TemporalPrerequisiteError(
-                "temporal index must be completed before search"
-            )
+            raise TemporalPrerequisiteError("temporal index must be completed before search")
         if temporal_index.embedding_provider != self.embedding_provider.name:
-            raise TemporalPrerequisiteError(
-                "configured embedding provider is not available"
-            )
+            raise TemporalPrerequisiteError("configured embedding provider is not available")
         if not queries:
             return []
         vectors = await self.embedding_provider.embed(
@@ -589,7 +585,4 @@ class TemporalSearchService:
             expected_count=len(queries),
             expected_dimensions=temporal_index.embedding_dimensions,
         )
-        return [
-            await repository.search(temporal_index.id, vector, limit)
-            for vector in vectors
-        ]
+        return [await repository.search(temporal_index.id, vector, limit) for vector in vectors]

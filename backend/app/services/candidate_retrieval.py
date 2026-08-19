@@ -113,29 +113,21 @@ def _candidate_score(
     scores = [item.hit.score for item in hits]
     semantic_mean = sum(scores) / len(scores)
     semantic_max = max(scores)
-    covered = sum(
-        item.hit.segment.end_seconds - item.hit.segment.start_seconds
-        for item in hits
-    )
+    covered = sum(item.hit.segment.end_seconds - item.hit.segment.start_seconds for item in hits)
     density = min(1.0, covered / max(cluster_end - cluster_start, 0.000001))
     chronological_prior: float | None = None
     if chronological_position is None:
         score = 0.60 * semantic_mean + 0.30 * semantic_max + 0.10 * density
     else:
         midpoint_position = (
-            ((cluster_start + cluster_end) / 2.0) / media_duration
-            if media_duration > 0
-            else 0.0
+            ((cluster_start + cluster_end) / 2.0) / media_duration if media_duration > 0 else 0.0
         )
         chronological_prior = max(
             0.0,
             1.0 - abs(midpoint_position - chronological_position),
         )
         score = (
-            0.55 * semantic_mean
-            + 0.30 * semantic_max
-            + 0.10 * density
-            + 0.05 * chronological_prior
+            0.55 * semantic_mean + 0.30 * semantic_max + 0.10 * density + 0.05 * chronological_prior
         )
     return score, {
         "semantic_mean": semantic_mean,
@@ -319,9 +311,7 @@ class CandidateRetrievalService:
     ) -> RetrievalResult:
         temporal_index, _ = await self._prerequisites(temporal_index_id)
         result = await self.db.execute(
-            select(Note)
-            .where(Note.session_id == temporal_index.session_id)
-            .order_by(Note.order)
+            select(Note).where(Note.session_id == temporal_index.session_id).order_by(Note.order)
         )
         session_notes = list(result.scalars().all())
         by_id = {note.id: note for note in session_notes}
@@ -344,9 +334,7 @@ class CandidateRetrievalService:
                 subject_key=f"note:{note.id}",
                 query=normalize_query(note.raw),
                 note_id=note.id,
-                chronological_position=(
-                    (note.order - 1) / (count - 1) if count > 1 else 0.5
-                ),
+                chronological_position=((note.order - 1) / (count - 1) if count > 1 else 0.5),
             )
             for note in notes
         ]
@@ -370,9 +358,7 @@ class CandidateRetrievalService:
                 "temporal index must be completed before candidate retrieval"
             )
         if temporal_index.embedding_provider != self.embedding_provider.name:
-            raise TemporalPrerequisiteError(
-                "configured embedding provider is not available"
-            )
+            raise TemporalPrerequisiteError("configured embedding provider is not available")
         media = await self.db.get(MediaAsset, temporal_index.media_id)
         if media is None or media.duration_seconds is None or media.duration_seconds <= 0:
             raise RetrievalPrerequisiteError("media duration is required")
@@ -507,15 +493,11 @@ class CandidateRetrievalService:
                         rank=rank,
                         start_seconds=definition.start_seconds,
                         end_seconds=definition.end_seconds,
-                        duration_seconds=(
-                            definition.end_seconds - definition.start_seconds
-                        ),
+                        duration_seconds=(definition.end_seconds - definition.start_seconds),
                         score=definition.score,
                         score_components=definition.score_components,
                         candidate_metadata={
-                            "cluster_start_seconds": (
-                                definition.cluster_start_seconds
-                            ),
+                            "cluster_start_seconds": (definition.cluster_start_seconds),
                             "cluster_end_seconds": definition.cluster_end_seconds,
                             "context_before_seconds": config.context_before_seconds,
                             "context_after_seconds": config.context_after_seconds,

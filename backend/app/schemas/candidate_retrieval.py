@@ -53,9 +53,7 @@ class RetrievalCandidateOut(ORMModel):
     duration_seconds: float
     score: float
     score_components: dict[str, Any]
-    metadata: dict[str, Any] | None = Field(
-        validation_alias="candidate_metadata"
-    )
+    metadata: dict[str, Any] | None = Field(validation_alias="candidate_metadata")
     created_at: datetime
 
 

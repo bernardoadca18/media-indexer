@@ -414,11 +414,7 @@ async def test_query_retrieval_persistence_idempotency_and_evidence(
         assert [item.timestamp_seconds for item in evidence.frames] == [45.0, 75.0]
         assert evidence.scenes
         assert (
-            await db.scalar(
-                select(func.count()).select_from(
-                    RetrievalCandidateTemporalSegment
-                )
-            )
+            await db.scalar(select(func.count()).select_from(RetrievalCandidateTemporalSegment))
             == 4
         )
 
@@ -571,9 +567,7 @@ async def test_candidate_retrieval_api_contracts(
     )
     assert single_note.status_code == 200, single_note.text
     assert single_note.json()["retrieval_run"]["kind"] == "notes"
-    assert {
-        item["note_id"] for item in single_note.json()["candidates"]
-    } == {str(note_id)}
+    assert {item["note_id"] for item in single_note.json()["candidates"]} == {str(note_id)}
 
     batch = client.post(
         f"/temporal-indexes/{temporal_index_id}/note-retrievals",

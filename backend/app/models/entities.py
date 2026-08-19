@@ -323,15 +323,9 @@ class RetrievalRun(Base, UUIDPrimaryKey, TimestampMixin):
         ),
         Index("ix_retrieval_runs_session_created", "session_id", "created_at"),
     )
-    project_id: Mapped[UUID] = mapped_column(
-        ForeignKey("media_projects.id", ondelete="CASCADE")
-    )
-    session_id: Mapped[UUID] = mapped_column(
-        ForeignKey("media_sessions.id", ondelete="CASCADE")
-    )
-    media_id: Mapped[UUID] = mapped_column(
-        ForeignKey("media_assets.id", ondelete="CASCADE")
-    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
     temporal_index_id: Mapped[UUID] = mapped_column(
         ForeignKey("temporal_indexes.id", ondelete="CASCADE")
     )
@@ -364,9 +358,7 @@ class RetrievalCandidate(Base, UUIDPrimaryKey):
     retrieval_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("retrieval_runs.id", ondelete="CASCADE")
     )
-    note_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("notes.id", ondelete="CASCADE")
-    )
+    note_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("notes.id", ondelete="CASCADE"))
     subject_key: Mapped[str] = mapped_column(String(100))
     rank: Mapped[int] = mapped_column(Integer)
     start_seconds: Mapped[float] = mapped_column(Float)

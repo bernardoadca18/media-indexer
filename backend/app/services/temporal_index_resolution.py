@@ -39,7 +39,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 import structlog
@@ -232,9 +231,7 @@ class TemporalIndexResolutionService:
         temporal_index = await self.db.get(TemporalIndex, temporal_index_id)
 
         if temporal_index is None:
-            raise TemporalIndexNotFoundError(
-                f"Temporal index {temporal_index_id} not found"
-            )
+            raise TemporalIndexNotFoundError(f"Temporal index {temporal_index_id} not found")
 
         if temporal_index.session_id != session_id:
             raise IncompatibleTemporalIndexError(

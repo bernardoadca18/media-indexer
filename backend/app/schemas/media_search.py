@@ -6,8 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.domain import ORMModel
-
 
 class MediaSearchRequest(BaseModel):
     """Request for searching media within a session or project."""
@@ -52,14 +50,10 @@ class MediaSearchResult(BaseModel):
     temporal_index_id: UUID
     retrieval_candidate_id: UUID | None = None
 
-    transcript_preview: str | None = Field(
-        default=None, description="Brief transcript excerpt"
-    )
+    transcript_preview: str | None = Field(default=None, description="Brief transcript excerpt")
     matched_note_ids: list[UUID] = Field(default_factory=list)
 
-    provenance: dict[str, Any] = Field(
-        default_factory=dict, description="Debugging provenance"
-    )
+    provenance: dict[str, Any] = Field(default_factory=dict, description="Debugging provenance")
 
 
 class MediaSearchSessionSummary(BaseModel):
