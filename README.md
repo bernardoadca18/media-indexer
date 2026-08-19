@@ -265,6 +265,38 @@ Operational defaults:
     ALIGNMENT_EARLY_STOP_CONFIDENCE=0.90
 
 
+## Consolidated Semantic Timeline
+
+The semantic timeline is a synchronous, read-only projection over one explicit
+completed TemporalIndex and, optionally, one compatible completed AlignmentRun:
+
+    GET /sessions/{session_id}/semantic-timeline
+        ?temporal_index_id={temporal_index_id}
+        &alignment_run_id={alignment_run_id}
+        &start_seconds=60
+        &end_seconds=180
+        &offset=0
+        &limit=100
+
+The response contains paginated TemporalSegment items, compact transcript,
+scene and representative-frame references, and all session Notes in immutable
+order. Frame references expose storage_uri and metadata, never bytes or base64.
+Embedding/search_text columns are not selected or serialized.
+
+Without alignment provenance, Notes are explicitly not_aligned. With a
+compatible completed run, the projection reports matched, unmatched,
+no_candidates and not_in_alignment_run without changing persisted state.
+Matched Notes include the selected candidate-bounded interval, confidence,
+anchors and overlapping TemporalSegment IDs.
+
+Range filtering uses interval overlap with [start,end) semantics:
+segment.end > start and segment.start < end. Pagination is applied after the
+range filter and total counts the full filtered result. Evidence is batch-loaded
+with a fixed query set, avoiding per-item relationship loading. Timeline
+assembly performs no provider, embedding, FFmpeg, storage write or job work.
+It therefore requires no new entity or migration.
+
+
 ## Long-running jobs
 
 Processing jobs record heartbeat_at, attempt_count and max_attempts. On startup,

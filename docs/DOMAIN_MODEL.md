@@ -153,3 +153,26 @@ URI, checksum, size, dimensions, timestamp and source window. Base64 is transpor
 only. Retry replaces subjects, candidate results and managed frame assets for
 the same AlignmentRun while preserving RetrievalRun, RetrievalCandidates and
 Note.raw.
+
+
+## Consolidated Semantic Timeline
+
+The Consolidated Semantic Timeline is a projection, not a persisted entity. Its
+identity is the explicit completed TemporalIndex plus an optional compatible
+completed AlignmentRun and request range. Existing normalized records remain
+the sources of truth, so no duplicate timeline table or migration is required.
+
+A timeline item projects one TemporalSegment with its sequence, [start,end)
+interval, deterministic transcript-derived text, silent flag and compact
+transcript/scene/frame provenance. It relates selected matched Notes by IDs.
+Representative frames remain DerivedAssets and are exposed only by storage_uri
+and metadata. Vectors, search_text internals and binary image content are not
+part of the contract.
+
+Every session Note is projected in immutable Note.order with exact Note.raw.
+Without an AlignmentRun its status is not_aligned. With a run, status comes from
+the corresponding AlignmentSubject, including unmatched and no_candidates.
+matched additionally projects the selected CandidateAlignment interval,
+confidence, bounded anchors and the TemporalSegments overlapping that interval.
+The projection never upgrades a candidate hypothesis or unmatched result into a
+different domain claim.

@@ -55,13 +55,25 @@ Provider-neutral multimodal temporal alignment is implemented:
 - asynchronous creation plus run, paginated-result and candidate-detail APIs;
 - deterministic fake-provider coverage and opt-in real gameplay scripts.
 
+Consolidated Semantic Timeline is implemented as a read-only projection:
+
+- explicit completed TemporalIndex and optional compatible AlignmentRun inputs;
+- paginated/range-filtered TemporalSegments with [start,end) overlap semantics;
+- compact transcript, scene and representative-frame provenance;
+- immutable ordered Notes with explicit matched, unmatched, no_candidates,
+  not_aligned and not_in_alignment_run states;
+- selected matched intervals, confidence, anchors and segment relationships;
+- fixed batched query shape with no embeddings, media processing or provider
+  invocation;
+- no persistence duplication and therefore no schema migration.
+
 ## Planned
 
-1. Consolidated Semantic Timeline export and project/session Media Search.
+1. Project/Session Media Search.
 
 Editorial work stays in Ideas Hub; voice, planning, composition and rendering
 stay in production services.
 
-There is still no OCR, image captioning, generic multimodal search, consolidated
-Semantic Timeline, project/session Media Search, Ideas Hub/Orchestrator
-integration or composition/rendering pipeline in this service.
+There is still no OCR, image captioning, generic multimodal search,
+Project/Session Media Search, Ideas Hub/Orchestrator integration or
+composition/rendering pipeline in this service.

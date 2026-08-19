@@ -48,11 +48,13 @@ backend/
       0003_visual_indexes.py
       0004_temporal_indexes_embeddings.py
       0005_candidate_retrieval.py
+      0006_multimodal_alignment.py
     env.py
   app/
     api/
       routers/
         __init__.py
+        alignments.py
         candidate_retrieval.py
         jobs.py
         projects.py
@@ -73,6 +75,7 @@ backend/
       entities.py
     repositories/
       __init__.py
+      alignment.py
       candidate_retrieval.py
       domain.py
       temporal_index.py
@@ -80,6 +83,7 @@ backend/
       visual_index.py
     schemas/
       __init__.py
+      alignment.py
       candidate_retrieval.py
       domain.py
       temporal_index.py
@@ -87,6 +91,9 @@ backend/
       visual_index.py
     services/
       __init__.py
+      alignment_prompt.py
+      alignment_provider.py
+      alignment.py
       candidate_retrieval.py
       embedding_provider.py
       ingestion.py
@@ -106,12 +113,16 @@ backend/
     __init__.py
     main.py
   scripts/
+    evaluate_note_alignment.py
     retrieve_note_candidates.py
     smoke_embedding.py
+    smoke_multimodal_alignment.py
     smoke_pgvector.py
     smoke_temporal_index.py
   tests/
     conftest.py
+    test_alignment_provider.py
+    test_alignment.py
     test_api.py
     test_candidate_retrieval.py
     test_derived_storage.py
@@ -950,6 +961,290 @@ def downgrade() -> None:
     op.drop_table("retrieval_runs")
 </file>
 
+<file path="backend/alembic/versions/0006_multimodal_alignment.py">
+"""Add provider-neutral multimodal temporal alignment."""
+
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+from alembic import op
+
+revision = "0006_multimodal_alignment"
+down_revision = "0005_candidate_retrieval"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    uuid = postgresql.UUID(as_uuid=True)
+    op.create_table(
+        "alignment_runs",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column(
+            "project_id",
+            uuid,
+            sa.ForeignKey("media_projects.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "session_id",
+            uuid,
+            sa.ForeignKey("media_sessions.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "media_id",
+            uuid,
+            sa.ForeignKey("media_assets.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "retrieval_run_id",
+            uuid,
+            sa.ForeignKey("retrieval_runs.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("provider", sa.String(100), nullable=False),
+        sa.Column("model", sa.String(200), nullable=False),
+        sa.Column("strategy", sa.String(100), nullable=False),
+        sa.Column("prompt_version", sa.String(50), nullable=False),
+        sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("configuration", postgresql.JSONB, nullable=False),
+        sa.Column("configuration_fingerprint", sa.String(64), nullable=False),
+        sa.Column("provider_metadata", postgresql.JSONB),
+        sa.Column("usage_metadata", postgresql.JSONB),
+        sa.Column("started_at", sa.DateTime(timezone=True)),
+        sa.Column("completed_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.UniqueConstraint(
+            "retrieval_run_id",
+            "configuration_fingerprint",
+            name="uq_alignment_run_retrieval_config",
+        ),
+    )
+    op.create_index(
+        "ix_alignment_runs_session_created",
+        "alignment_runs",
+        ["session_id", "created_at"],
+    )
+    op.create_table(
+        "alignment_subjects",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column(
+            "alignment_run_id",
+            uuid,
+            sa.ForeignKey("alignment_runs.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("subject_key", sa.String(100), nullable=False),
+        sa.Column(
+            "note_id",
+            uuid,
+            sa.ForeignKey("notes.id", ondelete="CASCADE"),
+        ),
+        sa.Column("observation", sa.Text, nullable=False),
+        sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("selected_candidate_alignment_id", uuid),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.UniqueConstraint(
+            "alignment_run_id",
+            "subject_key",
+            name="uq_alignment_subject_run_key",
+        ),
+    )
+    op.create_index(
+        "ix_alignment_subjects_run_status",
+        "alignment_subjects",
+        ["alignment_run_id", "status"],
+    )
+    op.create_table(
+        "candidate_alignments",
+        sa.Column("id", uuid, primary_key=True),
+        sa.Column(
+            "alignment_run_id",
+            uuid,
+            sa.ForeignKey("alignment_runs.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "alignment_subject_id",
+            uuid,
+            sa.ForeignKey("alignment_subjects.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "retrieval_candidate_id",
+            uuid,
+            sa.ForeignKey("retrieval_candidates.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "note_id",
+            uuid,
+            sa.ForeignKey("notes.id", ondelete="CASCADE"),
+        ),
+        sa.Column("retrieval_rank", sa.Integer, nullable=False),
+        sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("start_seconds", sa.Float),
+        sa.Column("end_seconds", sa.Float),
+        sa.Column("confidence", sa.Float),
+        sa.Column("anchors", postgresql.JSONB, nullable=False),
+        sa.Column("reasoning_summary", sa.Text),
+        sa.Column("timestamp_resolution_seconds", sa.Float),
+        sa.Column("pass_count", sa.Integer, nullable=False),
+        sa.Column("provider_metadata", postgresql.JSONB),
+        sa.Column("usage_metadata", postgresql.JSONB),
+        sa.Column("latency_seconds", sa.Float),
+        sa.Column("error", sa.Text),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column("started_at", sa.DateTime(timezone=True)),
+        sa.Column("completed_at", sa.DateTime(timezone=True)),
+        sa.UniqueConstraint(
+            "alignment_run_id",
+            "retrieval_candidate_id",
+            name="uq_candidate_alignment_run_candidate",
+        ),
+        sa.CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_candidate_alignment_confidence",
+        ),
+        sa.CheckConstraint(
+            "status != 'matched' OR "
+            "(start_seconds IS NOT NULL AND end_seconds IS NOT NULL "
+            "AND start_seconds >= 0 AND end_seconds > start_seconds "
+            "AND confidence IS NOT NULL)",
+            name="ck_candidate_alignment_matched_range",
+        ),
+        sa.CheckConstraint(
+            "status != 'unmatched' OR "
+            "(start_seconds IS NULL AND end_seconds IS NULL "
+            "AND confidence IS NOT NULL)",
+            name="ck_candidate_alignment_unmatched_range",
+        ),
+        sa.CheckConstraint(
+            "timestamp_resolution_seconds IS NULL " "OR timestamp_resolution_seconds > 0",
+            name="ck_candidate_alignment_resolution_positive",
+        ),
+    )
+    op.create_index(
+        "ix_candidate_alignments_subject_rank",
+        "candidate_alignments",
+        ["alignment_subject_id", "retrieval_rank"],
+    )
+    op.create_index(
+        "ix_candidate_alignments_candidate",
+        "candidate_alignments",
+        ["retrieval_candidate_id"],
+    )
+    op.create_foreign_key(
+        "fk_alignment_subject_selected_candidate",
+        "alignment_subjects",
+        "candidate_alignments",
+        ["selected_candidate_alignment_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+    op.add_column("derived_assets", sa.Column("alignment_run_id", uuid))
+    op.create_foreign_key(
+        "fk_derived_assets_alignment_run",
+        "derived_assets",
+        "alignment_runs",
+        ["alignment_run_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+    op.create_index(
+        "ix_derived_assets_alignment_timestamp",
+        "derived_assets",
+        ["alignment_run_id", "timestamp_seconds"],
+    )
+    op.add_column("processing_jobs", sa.Column("alignment_run_id", uuid))
+    op.create_foreign_key(
+        "fk_processing_jobs_alignment_run",
+        "processing_jobs",
+        "alignment_runs",
+        ["alignment_run_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+    op.create_index(
+        "ix_processing_jobs_alignment_run",
+        "processing_jobs",
+        ["alignment_run_id"],
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_processing_jobs_alignment_run", table_name="processing_jobs")
+    op.drop_constraint(
+        "fk_processing_jobs_alignment_run",
+        "processing_jobs",
+        type_="foreignkey",
+    )
+    op.drop_column("processing_jobs", "alignment_run_id")
+    op.drop_index(
+        "ix_derived_assets_alignment_timestamp",
+        table_name="derived_assets",
+    )
+    op.drop_constraint(
+        "fk_derived_assets_alignment_run",
+        "derived_assets",
+        type_="foreignkey",
+    )
+    op.drop_column("derived_assets", "alignment_run_id")
+    op.drop_constraint(
+        "fk_alignment_subject_selected_candidate",
+        "alignment_subjects",
+        type_="foreignkey",
+    )
+    op.drop_index(
+        "ix_candidate_alignments_candidate",
+        table_name="candidate_alignments",
+    )
+    op.drop_index(
+        "ix_candidate_alignments_subject_rank",
+        table_name="candidate_alignments",
+    )
+    op.drop_table("candidate_alignments")
+    op.drop_index(
+        "ix_alignment_subjects_run_status",
+        table_name="alignment_subjects",
+    )
+    op.drop_table("alignment_subjects")
+    op.drop_index(
+        "ix_alignment_runs_session_created",
+        table_name="alignment_runs",
+    )
+    op.drop_table("alignment_runs")
+</file>
+
 <file path="backend/alembic/env.py">
 import asyncio
 from logging.config import fileConfig
@@ -995,6 +1290,153 @@ else:
 
 <file path="backend/app/api/routers/__init__.py">
 
+</file>
+
+<file path="backend/app/api/routers/alignments.py">
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.api.dependencies import DB
+from app.core.config import settings
+from app.repositories.alignment import AlignmentRepository
+from app.schemas.alignment import (
+    AlignmentAcceptedOut,
+    AlignmentCreate,
+    AlignmentRunDetailOut,
+    CandidateAlignmentOut,
+    CandidateAlignmentPageOut,
+)
+from app.services.alignment import (
+    AlignmentAttemptsExhaustedError,
+    AlignmentConfig,
+    AlignmentPrerequisiteError,
+    AlignmentRequest,
+    AlignmentService,
+)
+from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
+from app.workers.runner import job_runner
+
+router = APIRouter(tags=["multimodal-alignment"])
+
+
+def _config(payload: AlignmentCreate) -> AlignmentConfig:
+    return AlignmentConfig(
+        frame_interval_seconds=payload.frame_interval_seconds
+        or settings.alignment_frame_interval_seconds,
+        max_frames=payload.max_frames or settings.alignment_max_frames,
+        frame_width=payload.frame_width or settings.alignment_frame_width,
+        jpeg_quality=payload.jpeg_quality or settings.alignment_jpeg_quality,
+        frame_dedup_tolerance_seconds=(settings.alignment_frame_dedup_tolerance_seconds),
+        max_transcript_characters=payload.max_transcript_characters
+        or settings.alignment_max_transcript_characters,
+        refinement_enabled=(
+            settings.alignment_refinement_enabled
+            if payload.refinement_enabled is None
+            else payload.refinement_enabled
+        ),
+        refinement_frame_interval_seconds=(settings.alignment_refinement_frame_interval_seconds),
+        refinement_padding_seconds=settings.alignment_refinement_padding_seconds,
+        refinement_max_frames=settings.alignment_refinement_max_frames,
+        early_stop_confidence=(
+            settings.alignment_early_stop_confidence
+            if payload.early_stop_confidence is None
+            else payload.early_stop_confidence
+        ),
+    )
+
+
+@router.post(
+    "/retrieval-runs/{retrieval_run_id}/alignments",
+    response_model=AlignmentAcceptedOut,
+    status_code=202,
+)
+async def create_alignment(
+    retrieval_run_id: UUID,
+    payload: AlignmentCreate,
+    db: DB,
+) -> AlignmentAcceptedOut:
+    request = AlignmentRequest(
+        model=payload.model or settings.alignment_model,
+        candidate_ids=(tuple(payload.candidate_ids) if payload.candidate_ids is not None else None),
+        config=_config(payload),
+    )
+    try:
+        result = await AlignmentService(
+            db,
+            provider_name=LiteLLMMultimodalAlignmentProvider.name,
+            max_attempts=settings.job_max_attempts,
+        ).ensure(retrieval_run_id, request)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (
+        AlignmentPrerequisiteError,
+        AlignmentAttemptsExhaustedError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result.enqueue:
+        job_runner.enqueue(result.job.id)
+    return AlignmentAcceptedOut(
+        alignment_run=result.alignment_run,
+        job=result.job,
+        created=result.created,
+    )
+
+
+@router.get(
+    "/alignment-runs/{alignment_run_id}",
+    response_model=AlignmentRunDetailOut,
+)
+async def get_alignment_run(
+    alignment_run_id: UUID,
+    db: DB,
+) -> AlignmentRunDetailOut:
+    repository = AlignmentRepository(db)
+    run = await repository.get_run(alignment_run_id)
+    if run is None:
+        raise HTTPException(404, "alignment run not found")
+    return AlignmentRunDetailOut(
+        alignment_run=run,
+        subjects=list(await repository.subjects(run.id)),
+    )
+
+
+@router.get(
+    "/alignment-runs/{alignment_run_id}/results",
+    response_model=CandidateAlignmentPageOut,
+)
+async def list_alignment_results(
+    alignment_run_id: UUID,
+    db: DB,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> CandidateAlignmentPageOut:
+    repository = AlignmentRepository(db)
+    if await repository.get_run(alignment_run_id) is None:
+        raise HTTPException(404, "alignment run not found")
+    items, total = await repository.results(alignment_run_id, offset, limit)
+    return CandidateAlignmentPageOut(
+        items=list(items),
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/candidate-alignments/{candidate_alignment_id}",
+    response_model=CandidateAlignmentOut,
+)
+async def get_candidate_alignment(
+    candidate_alignment_id: UUID,
+    db: DB,
+) -> object:
+    result = await AlignmentRepository(db).result(candidate_alignment_id)
+    if result is None:
+        raise HTTPException(404, "candidate alignment not found")
+    return result
 </file>
 
 <file path="backend/app/api/routers/candidate_retrieval.py">
@@ -1876,6 +2318,125 @@ class TimestampMixin:
 
 </file>
 
+<file path="backend/app/repositories/alignment.py">
+from collections.abc import Sequence
+from uuid import UUID
+
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import (
+    AlignmentRun,
+    AlignmentSubject,
+    CandidateAlignment,
+    DerivedAsset,
+    RetrievalCandidate,
+    RetrievalRun,
+)
+
+
+class AlignmentRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def get_run(self, alignment_run_id: UUID) -> AlignmentRun | None:
+        return await self.db.get(AlignmentRun, alignment_run_id)
+
+    async def by_fingerprint(
+        self,
+        retrieval_run_id: UUID,
+        fingerprint: str,
+    ) -> AlignmentRun | None:
+        result = await self.db.execute(
+            select(AlignmentRun).where(
+                AlignmentRun.retrieval_run_id == retrieval_run_id,
+                AlignmentRun.configuration_fingerprint == fingerprint,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def retrieval_run(self, retrieval_run_id: UUID) -> RetrievalRun | None:
+        return await self.db.get(RetrievalRun, retrieval_run_id)
+
+    async def candidates(
+        self,
+        retrieval_run_id: UUID,
+        candidate_ids: set[UUID] | None = None,
+    ) -> Sequence[RetrievalCandidate]:
+        statement = select(RetrievalCandidate).where(
+            RetrievalCandidate.retrieval_run_id == retrieval_run_id
+        )
+        if candidate_ids is not None:
+            statement = statement.where(RetrievalCandidate.id.in_(candidate_ids))
+        result = await self.db.execute(
+            statement.order_by(
+                RetrievalCandidate.subject_key,
+                RetrievalCandidate.rank,
+            )
+        )
+        return result.scalars().all()
+
+    async def subjects(self, alignment_run_id: UUID) -> Sequence[AlignmentSubject]:
+        result = await self.db.execute(
+            select(AlignmentSubject)
+            .where(AlignmentSubject.alignment_run_id == alignment_run_id)
+            .order_by(AlignmentSubject.subject_key)
+        )
+        return result.scalars().all()
+
+    async def results(
+        self,
+        alignment_run_id: UUID,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[Sequence[CandidateAlignment], int]:
+        statement = select(CandidateAlignment).where(
+            CandidateAlignment.alignment_run_id == alignment_run_id
+        )
+        total = await self.db.scalar(select(func.count()).select_from(statement.subquery()))
+        result = await self.db.execute(
+            statement.order_by(
+                CandidateAlignment.alignment_subject_id,
+                CandidateAlignment.retrieval_rank,
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+        return result.scalars().all(), int(total or 0)
+
+    async def result(self, candidate_alignment_id: UUID) -> CandidateAlignment | None:
+        return await self.db.get(CandidateAlignment, candidate_alignment_id)
+
+    async def clear_outputs(self, alignment_run_id: UUID) -> None:
+        await self.db.execute(
+            update(AlignmentSubject)
+            .where(AlignmentSubject.alignment_run_id == alignment_run_id)
+            .values(selected_candidate_alignment_id=None)
+        )
+        await self.db.execute(
+            delete(CandidateAlignment).where(
+                CandidateAlignment.alignment_run_id == alignment_run_id
+            )
+        )
+        await self.db.execute(
+            delete(AlignmentSubject).where(AlignmentSubject.alignment_run_id == alignment_run_id)
+        )
+        await self.db.execute(
+            delete(DerivedAsset).where(DerivedAsset.alignment_run_id == alignment_run_id)
+        )
+
+    async def alignment_assets(
+        self,
+        alignment_run_id: UUID,
+    ) -> Sequence[DerivedAsset]:
+        result = await self.db.execute(
+            select(DerivedAsset)
+            .where(DerivedAsset.alignment_run_id == alignment_run_id)
+            .order_by(DerivedAsset.timestamp_seconds, DerivedAsset.id)
+        )
+        return result.scalars().all()
+</file>
+
 <file path="backend/app/repositories/candidate_retrieval.py">
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -2400,6 +2961,104 @@ class VisualIndexRepository:
 
 </file>
 
+<file path="backend/app/schemas/alignment.py">
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+from app.schemas.domain import JobOut, ORMModel
+
+
+class AlignmentCreate(BaseModel):
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    candidate_ids: list[UUID] | None = Field(default=None, min_length=1)
+    frame_interval_seconds: float | None = Field(default=None, gt=0)
+    max_frames: int | None = Field(default=None, ge=1, le=300)
+    frame_width: int | None = Field(default=None, ge=64, le=4096)
+    jpeg_quality: int | None = Field(default=None, ge=1, le=100)
+    max_transcript_characters: int | None = Field(default=None, ge=1, le=100000)
+    refinement_enabled: bool | None = None
+    early_stop_confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class AlignmentRunOut(ORMModel):
+    id: UUID
+    project_id: UUID
+    session_id: UUID
+    media_id: UUID
+    retrieval_run_id: UUID
+    provider: str
+    model: str
+    strategy: str
+    prompt_version: str
+    status: str
+    configuration: dict[str, Any]
+    configuration_fingerprint: str
+    provider_metadata: dict[str, Any] | None
+    usage_metadata: dict[str, Any] | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlignmentSubjectOut(ORMModel):
+    id: UUID
+    alignment_run_id: UUID
+    subject_key: str
+    note_id: UUID | None
+    observation: str
+    status: str
+    selected_candidate_alignment_id: UUID | None
+    created_at: datetime
+
+
+class CandidateAlignmentOut(ORMModel):
+    id: UUID
+    alignment_run_id: UUID
+    alignment_subject_id: UUID
+    retrieval_candidate_id: UUID
+    note_id: UUID | None
+    retrieval_rank: int
+    status: str
+    start_seconds: float | None
+    end_seconds: float | None
+    confidence: float | None
+    anchors: list[dict[str, Any]]
+    reasoning_summary: str | None
+    timestamp_resolution_seconds: float | None
+    pass_count: int
+    provider_metadata: dict[str, Any] | None
+    usage_metadata: dict[str, Any] | None
+    latency_seconds: float | None
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class AlignmentAcceptedOut(BaseModel):
+    alignment_run: AlignmentRunOut
+    job: JobOut
+    created: bool
+
+
+class AlignmentRunDetailOut(BaseModel):
+    alignment_run: AlignmentRunOut
+    subjects: list[AlignmentSubjectOut]
+
+
+class CandidateAlignmentPageOut(BaseModel):
+    items: list[CandidateAlignmentOut]
+    total: int
+    offset: int
+    limit: int
+</file>
+
 <file path="backend/app/schemas/candidate_retrieval.py">
 from datetime import datetime
 from typing import Any
@@ -2782,6 +3441,1070 @@ class DerivedAssetPage(BaseModel):
 
 <file path="backend/app/services/__init__.py">
 
+</file>
+
+<file path="backend/app/services/alignment_prompt.py">
+from typing import Any
+
+from app.services.alignment_provider import AlignmentProviderRequest, AlignmentProviderResult
+
+ALIGNMENT_STRATEGY = "multimodal_alignment_v1"
+ALIGNMENT_PROMPT_VERSION = "alignment_prompt_v1"
+
+SYSTEM_INSTRUCTION = """You validate a small candidate window against one source observation.
+The candidate is only a retrieval hypothesis and may be wrong. matched=false is normal.
+Use only the timestamped transcript and images supplied. Do not invent events.
+For subjective observations, locate the experience that plausibly produced the observation
+without claiming the opinion is an objective visual fact.
+When matched=true, return the smallest defensible interval inside the candidate.
+When matched=false, timestamps must be null. Confidence describes confidence in either result.
+Return only the requested structured JSON and never chain-of-thought."""
+
+
+def build_alignment_text(request: AlignmentProviderRequest) -> str:
+    source_label = "RAW NOTE" if request.note_id is not None else "QUERY"
+    transcript = "\n".join(
+        f"[{item.start_seconds:.3f},{item.end_seconds:.3f}) {item.text}"
+        for item in request.transcript
+    )
+    if not transcript:
+        transcript = "(no transcript evidence)"
+    return (
+        f"{source_label}:\n{request.observation}\n\n"
+        f"CANDIDATE:\n"
+        f"start={request.candidate_start_seconds:.3f}\n"
+        f"end={request.candidate_end_seconds:.3f}\n"
+        f"retrieval_rank={request.retrieval_rank}\n"
+        f"retrieval_score={request.retrieval_score:.6f}\n"
+        f"pass={request.pass_name}\n"
+        f"timestamp_resolution_seconds={request.timestamp_resolution_seconds:.3f}\n"
+        f"transcript_truncated={str(request.transcript_truncated).lower()}\n\n"
+        f"TIMESTAMPED TRANSCRIPT:\n{transcript}\n\n"
+        "Each following image is preceded by a FRAME timestamp. "
+        "All output timestamps and anchors must remain inside the candidate."
+    )
+
+
+def response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "multimodal_alignment_result",
+            "strict": True,
+            "schema": AlignmentProviderResult.model_json_schema(),
+        },
+    }
+</file>
+
+<file path="backend/app/services/alignment_provider.py">
+import base64
+import json
+import time
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
+from uuid import UUID
+
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class AlignmentProviderError(RuntimeError):
+    def __init__(self, message: str, *, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
+
+
+class InvalidAlignmentOutputError(ValueError):
+    pass
+
+
+class AlignmentAnchor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp_seconds: float
+    description: str = Field(min_length=1, max_length=300)
+
+
+class AlignmentProviderResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    matched: bool
+    start_seconds: float | None
+    end_seconds: float | None
+    confidence: float = Field(ge=0.0, le=1.0)
+    anchors: list[AlignmentAnchor] = Field(default_factory=list, max_length=5)
+    reasoning_summary: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_match_shape(self) -> "AlignmentProviderResult":
+        if self.matched:
+            if self.start_seconds is None or self.end_seconds is None:
+                raise ValueError("matched result requires start and end timestamps")
+            if self.end_seconds <= self.start_seconds:
+                raise ValueError("matched result requires end greater than start")
+        elif self.start_seconds is not None or self.end_seconds is not None:
+            raise ValueError("unmatched result requires null timestamps")
+        return self
+
+
+@dataclass(frozen=True)
+class AlignmentTranscriptEvidence:
+    start_seconds: float
+    end_seconds: float
+    text: str
+
+
+@dataclass(frozen=True)
+class AlignmentFrameEvidence:
+    timestamp_seconds: float
+    content: bytes
+    mime_type: str
+    storage_uri: str
+    origin: str
+
+
+@dataclass(frozen=True)
+class AlignmentProviderRequest:
+    candidate_id: UUID
+    note_id: UUID | None
+    observation: str
+    candidate_start_seconds: float
+    candidate_end_seconds: float
+    retrieval_rank: int
+    retrieval_score: float
+    pass_name: Literal["coarse", "refinement"]
+    timestamp_resolution_seconds: float
+    transcript: tuple[AlignmentTranscriptEvidence, ...]
+    transcript_truncated: bool
+    frames: tuple[AlignmentFrameEvidence, ...]
+
+
+@dataclass(frozen=True)
+class AlignmentProviderResponse:
+    result: AlignmentProviderResult
+    provider_metadata: dict[str, Any] | None
+    usage_metadata: dict[str, Any] | None
+    latency_seconds: float
+
+
+class MultimodalAlignmentProvider(Protocol):
+    name: str
+
+    async def align(
+        self,
+        request: AlignmentProviderRequest,
+        *,
+        model: str,
+    ) -> AlignmentProviderResponse: ...
+
+
+def validate_result_bounds(
+    result: AlignmentProviderResult,
+    request: AlignmentProviderRequest,
+) -> None:
+    start = request.candidate_start_seconds
+    end = request.candidate_end_seconds
+    if result.matched:
+        assert result.start_seconds is not None
+        assert result.end_seconds is not None
+        if not (start <= result.start_seconds < result.end_seconds <= end):
+            raise InvalidAlignmentOutputError(
+                "provider alignment timestamps are outside the candidate window"
+            )
+    for anchor in result.anchors:
+        if not start <= anchor.timestamp_seconds <= end:
+            raise InvalidAlignmentOutputError(
+                "provider anchor timestamp is outside the candidate window"
+            )
+
+
+class LiteLLMMultimodalAlignmentProvider:
+    name = "litellm"
+
+    def __init__(self, base_url: str, api_key: str, timeout_seconds: float):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout_seconds = timeout_seconds
+
+    async def align(
+        self,
+        request: AlignmentProviderRequest,
+        *,
+        model: str,
+    ) -> AlignmentProviderResponse:
+        from app.services.alignment_prompt import (
+            SYSTEM_INSTRUCTION,
+            build_alignment_text,
+            response_format,
+        )
+
+        content: list[dict[str, Any]] = [{"type": "text", "text": build_alignment_text(request)}]
+        for frame in request.frames:
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"FRAME @ {frame.timestamp_seconds:.3f}",
+                }
+            )
+            encoded = base64.b64encode(frame.content).decode("ascii")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{frame.mime_type};base64,{encoded}",
+                        "detail": "low",
+                    },
+                }
+            )
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_INSTRUCTION},
+                            {"role": "user", "content": content},
+                        ],
+                        "temperature": 0,
+                        "response_format": response_format(),
+                    },
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            raise AlignmentProviderError(
+                f"LiteLLM alignment request failed with HTTP {status}",
+                transient=status == 429 or status >= 500,
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise AlignmentProviderError(
+                "LiteLLM alignment request timed out",
+                transient=True,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise AlignmentProviderError(
+                "LiteLLM alignment request failed",
+                transient=True,
+            ) from exc
+        latency = time.monotonic() - started
+
+        try:
+            payload: Any = response.json()
+            raw_content = payload["choices"][0]["message"]["content"]
+            if not isinstance(raw_content, str):
+                raise TypeError
+            result = AlignmentProviderResult.model_validate(json.loads(raw_content))
+            usage = payload.get("usage")
+            provider_metadata = {
+                key: payload[key] for key in ("id", "model", "system_fingerprint") if key in payload
+            }
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
+            raise InvalidAlignmentOutputError(
+                "LiteLLM returned an invalid structured alignment response"
+            ) from exc
+        validate_result_bounds(result, request)
+        return AlignmentProviderResponse(
+            result=result,
+            provider_metadata=provider_metadata or None,
+            usage_metadata=usage if isinstance(usage, dict) else None,
+            latency_seconds=latency,
+        )
+</file>
+
+<file path="backend/app/services/alignment.py">
+import asyncio
+import hashlib
+import json
+import math
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
+import structlog
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import (
+    AlignmentRun,
+    AlignmentSubject,
+    CandidateAlignment,
+    DerivedAsset,
+    MediaAsset,
+    Note,
+    ProcessingJob,
+    RetrievalCandidate,
+)
+from app.repositories.alignment import AlignmentRepository
+from app.repositories.candidate_retrieval import CandidateEvidenceRecord
+from app.repositories.domain import JobRepository
+from app.services.alignment_prompt import ALIGNMENT_PROMPT_VERSION, ALIGNMENT_STRATEGY
+from app.services.alignment_provider import (
+    AlignmentFrameEvidence,
+    AlignmentProviderRequest,
+    AlignmentProviderResponse,
+    AlignmentTranscriptEvidence,
+    MultimodalAlignmentProvider,
+    validate_result_bounds,
+)
+from app.services.candidate_retrieval import CandidateEvidenceService
+from app.services.storage import Storage
+from app.services.visual_tools import FrameExtractor
+
+logger = structlog.get_logger(__name__)
+
+
+class AlignmentPrerequisiteError(ValueError):
+    pass
+
+
+class AlignmentAttemptsExhaustedError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class AlignmentConfig:
+    frame_interval_seconds: float = 2.0
+    max_frames: int = 60
+    frame_width: int = 640
+    jpeg_quality: int = 82
+    frame_dedup_tolerance_seconds: float = 0.25
+    max_transcript_characters: int = 12000
+    refinement_enabled: bool = False
+    refinement_frame_interval_seconds: float = 0.5
+    refinement_padding_seconds: float = 4.0
+    refinement_max_frames: int = 40
+    early_stop_confidence: float = 0.90
+
+    def validate(self) -> None:
+        if self.frame_interval_seconds <= 0 or self.max_frames < 1:
+            raise ValueError("invalid coarse frame sampling configuration")
+        if self.frame_width <= 0 or not 1 <= self.jpeg_quality <= 100:
+            raise ValueError("invalid alignment frame encoding configuration")
+        if self.frame_dedup_tolerance_seconds < 0:
+            raise ValueError("frame dedup tolerance must be nonnegative")
+        if self.max_transcript_characters < 1:
+            raise ValueError("transcript limit must be positive")
+        if self.refinement_frame_interval_seconds <= 0:
+            raise ValueError("refinement frame interval must be positive")
+        if self.refinement_padding_seconds < 0 or self.refinement_max_frames < 1:
+            raise ValueError("invalid refinement configuration")
+        if not 0 <= self.early_stop_confidence <= 1:
+            raise ValueError("early stop confidence must be between 0 and 1")
+
+
+@dataclass(frozen=True)
+class AlignmentRequest:
+    model: str
+    candidate_ids: tuple[UUID, ...] | None
+    config: AlignmentConfig
+
+
+@dataclass(frozen=True)
+class EnsureAlignmentResult:
+    alignment_run: AlignmentRun
+    job: ProcessingJob
+    enqueue: bool
+    created: bool
+
+
+@dataclass(frozen=True)
+class AlignmentSubjectSpec:
+    subject_key: str
+    note_id: UUID | None
+    observation: str
+
+
+@dataclass(frozen=True)
+class FrameSamplingPlan:
+    timestamps: tuple[float, ...]
+    resolution_seconds: float
+
+
+def alignment_fingerprint(configuration: dict[str, Any]) -> str:
+    canonical = json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def sample_frame_timestamps(
+    start_seconds: float,
+    end_seconds: float,
+    interval_seconds: float,
+    max_frames: int,
+) -> FrameSamplingPlan:
+    if start_seconds < 0 or end_seconds <= start_seconds:
+        raise ValueError("invalid alignment frame window")
+    if interval_seconds <= 0 or max_frames < 1:
+        raise ValueError("invalid alignment frame sampling configuration")
+    duration = end_seconds - start_seconds
+    desired = math.floor(duration / interval_seconds) + 1
+    if desired <= max_frames:
+        values = tuple(start_seconds + index * interval_seconds for index in range(desired))
+        resolution = interval_seconds
+    elif max_frames == 1:
+        values = (start_seconds + duration / 2.0,)
+        resolution = duration
+    else:
+        resolution = duration / (max_frames - 1)
+        values = tuple(start_seconds + index * resolution for index in range(max_frames))
+    return FrameSamplingPlan(values, resolution)
+
+
+def refinement_window(
+    coarse_start: float,
+    coarse_end: float,
+    candidate_start: float,
+    candidate_end: float,
+    padding_seconds: float,
+) -> tuple[float, float]:
+    start = max(candidate_start, coarse_start - padding_seconds)
+    end = min(candidate_end, coarse_end + padding_seconds)
+    if end <= start:
+        raise ValueError("invalid refinement window")
+    return start, end
+
+
+def _transcript_evidence(
+    evidence: CandidateEvidenceRecord,
+    start_seconds: float,
+    end_seconds: float,
+    max_characters: int,
+) -> tuple[tuple[AlignmentTranscriptEvidence, ...], bool]:
+    selected: list[AlignmentTranscriptEvidence] = []
+    used = 0
+    truncated = False
+    for segment in evidence.transcript_segments:
+        if segment.end_seconds <= start_seconds or segment.start_seconds >= end_seconds:
+            continue
+        remaining = max_characters - used
+        if remaining <= 0:
+            truncated = True
+            break
+        text = segment.text
+        if len(text) > remaining:
+            text = text[:remaining]
+            truncated = True
+        selected.append(
+            AlignmentTranscriptEvidence(
+                segment.start_seconds,
+                segment.end_seconds,
+                text,
+            )
+        )
+        used += len(text)
+        if truncated:
+            break
+    return tuple(selected), truncated
+
+
+def _subject_definitions(configuration: dict[str, Any]) -> list[dict[str, Any]]:
+    subjects = configuration.get("subjects")
+    if not isinstance(subjects, list):
+        raise AlignmentPrerequisiteError("invalid retrieval subject provenance")
+    result: list[dict[str, Any]] = []
+    for item in subjects:
+        if not isinstance(item, dict) or not isinstance(item.get("subject_key"), str):
+            raise AlignmentPrerequisiteError("invalid retrieval subject provenance")
+        result.append(item)
+    return result
+
+
+class AlignmentService:
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        provider_name: str,
+        max_attempts: int,
+    ):
+        self.db = db
+        self.provider_name = provider_name
+        self.max_attempts = max_attempts
+        self.repository = AlignmentRepository(db)
+
+    async def ensure(
+        self,
+        retrieval_run_id: UUID,
+        request: AlignmentRequest,
+    ) -> EnsureAlignmentResult:
+        request.config.validate()
+        if not request.model.strip():
+            raise ValueError("alignment model must not be blank")
+        retrieval_run = await self.repository.retrieval_run(retrieval_run_id)
+        if retrieval_run is None:
+            raise LookupError("retrieval run not found")
+        if retrieval_run.status != "completed":
+            raise AlignmentPrerequisiteError("retrieval run must be completed before alignment")
+        candidate_ids = set(request.candidate_ids) if request.candidate_ids is not None else None
+        if candidate_ids is not None and len(candidate_ids) != len(request.candidate_ids or ()):
+            raise AlignmentPrerequisiteError("candidate_ids must not contain duplicates")
+        candidates = list(await self.repository.candidates(retrieval_run.id, candidate_ids))
+        if candidate_ids is not None and {item.id for item in candidates} != candidate_ids:
+            raise AlignmentPrerequisiteError("every candidate must belong to the retrieval run")
+        configured_subjects = _subject_definitions(retrieval_run.configuration)
+        if candidate_ids is None:
+            subject_keys = [item["subject_key"] for item in configured_subjects]
+        else:
+            selected_keys = {item.subject_key for item in candidates}
+            subject_keys = [
+                item["subject_key"]
+                for item in configured_subjects
+                if item["subject_key"] in selected_keys
+            ]
+        configuration: dict[str, Any] = {
+            "retrieval_run_id": str(retrieval_run.id),
+            "candidate_ids": [str(item.id) for item in candidates],
+            "subject_keys": subject_keys,
+            "provider": self.provider_name,
+            "model": request.model,
+            "strategy": ALIGNMENT_STRATEGY,
+            "prompt_version": ALIGNMENT_PROMPT_VERSION,
+            "frame_sampling": asdict(request.config),
+            "provider_retry_policy": "job_only",
+            "result_schema": "alignment_result_v1",
+        }
+        fingerprint = alignment_fingerprint(configuration)
+        existing = await self.repository.by_fingerprint(
+            retrieval_run.id,
+            fingerprint,
+        )
+        if existing is not None:
+            job = await JobRepository(self.db).for_alignment_run(existing.id)
+            if job is None:
+                raise RuntimeError("alignment run exists without processing job")
+            enqueue = False
+            if job.status == "failed":
+                if job.attempt_count >= job.max_attempts:
+                    raise AlignmentAttemptsExhaustedError("alignment run reached its attempt limit")
+                existing.status = "pending"
+                existing.started_at = None
+                existing.completed_at = None
+                existing.provider_metadata = None
+                existing.usage_metadata = None
+                job.status = "pending"
+                job.stage = "queued"
+                job.progress = 0.0
+                job.error = None
+                job.completed_at = None
+                job.heartbeat_at = None
+                enqueue = True
+                await self.db.commit()
+            return EnsureAlignmentResult(existing, job, enqueue, False)
+        run = AlignmentRun(
+            project_id=retrieval_run.project_id,
+            session_id=retrieval_run.session_id,
+            media_id=retrieval_run.media_id,
+            retrieval_run_id=retrieval_run.id,
+            provider=self.provider_name,
+            model=request.model,
+            strategy=ALIGNMENT_STRATEGY,
+            prompt_version=ALIGNMENT_PROMPT_VERSION,
+            status="pending",
+            configuration=configuration,
+            configuration_fingerprint=fingerprint,
+        )
+        self.db.add(run)
+        try:
+            await self.db.flush()
+            job = ProcessingJob(
+                project_id=retrieval_run.project_id,
+                session_id=retrieval_run.session_id,
+                media_id=retrieval_run.media_id,
+                alignment_run_id=run.id,
+                job_type="multimodal_alignment",
+                status="pending",
+                stage="queued",
+                progress=0.0,
+                max_attempts=self.max_attempts,
+            )
+            self.db.add(job)
+            await self.db.flush()
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            concurrent = await self.repository.by_fingerprint(
+                retrieval_run.id,
+                fingerprint,
+            )
+            if concurrent is None:
+                raise exc
+            concurrent_job = await JobRepository(self.db).for_alignment_run(concurrent.id)
+            if concurrent_job is None:
+                raise RuntimeError(
+                    "concurrent alignment run exists without processing job"
+                ) from exc
+            return EnsureAlignmentResult(concurrent, concurrent_job, False, False)
+        await self.db.refresh(run)
+        await self.db.refresh(job)
+        return EnsureAlignmentResult(run, job, True, True)
+
+
+class AlignmentEvidenceBuilder:
+    def __init__(
+        self,
+        db: AsyncSession,
+        storage: Storage,
+        extractor: FrameExtractor,
+    ):
+        self.db = db
+        self.storage = storage
+        self.extractor = extractor
+
+    async def build(
+        self,
+        *,
+        run: AlignmentRun,
+        candidate: RetrievalCandidate,
+        observation: str,
+        note_id: UUID | None,
+        source: Path,
+        pass_name: str,
+        window_start: float,
+        window_end: float,
+        interval_seconds: float,
+        max_frames: int,
+        config: AlignmentConfig,
+    ) -> AlignmentProviderRequest:
+        evidence = await CandidateEvidenceService(self.db).get(candidate.id)
+        plan = sample_frame_timestamps(
+            window_start,
+            window_end,
+            interval_seconds,
+            max_frames,
+        )
+        frames: list[AlignmentFrameEvidence] = []
+        for sequence, timestamp in enumerate(plan.timestamps, start=1):
+            extracted = await self.extractor.extract(
+                source,
+                timestamp,
+                config.frame_width,
+                "jpeg",
+                config.jpeg_quality,
+            )
+            filename = (
+                f"{candidate.id}-{pass_name}-{sequence:04d}-" f"{round(timestamp * 1000):012d}.jpg"
+            )
+            stored = await self.storage.save_derived(
+                run.project_id,
+                run.session_id,
+                "alignment",
+                run.id,
+                "frames",
+                filename,
+                extracted.content,
+            )
+            self.db.add(
+                DerivedAsset(
+                    project_id=run.project_id,
+                    session_id=run.session_id,
+                    media_id=run.media_id,
+                    alignment_run_id=run.id,
+                    kind="alignment_frame",
+                    storage_uri=stored.uri,
+                    mime_type=extracted.mime_type,
+                    byte_size=stored.byte_size,
+                    sha256=stored.sha256,
+                    width=extracted.width,
+                    height=extracted.height,
+                    timestamp_seconds=timestamp,
+                    source_start_seconds=window_start,
+                    source_end_seconds=window_end,
+                    asset_metadata={
+                        "candidate_id": str(candidate.id),
+                        "pass": pass_name,
+                        "sampling_resolution_seconds": plan.resolution_seconds,
+                    },
+                )
+            )
+            frames.append(
+                AlignmentFrameEvidence(
+                    timestamp,
+                    extracted.content,
+                    extracted.mime_type,
+                    stored.uri,
+                    "alignment",
+                )
+            )
+        await self.db.commit()
+        for representative in evidence.frames:
+            representative_timestamp = representative.timestamp_seconds
+            if len(frames) >= max_frames:
+                break
+            if (
+                representative_timestamp is None
+                or not window_start <= representative_timestamp <= window_end
+            ):
+                continue
+            if any(
+                abs(item.timestamp_seconds - representative_timestamp)
+                < config.frame_dedup_tolerance_seconds
+                for item in frames
+            ):
+                continue
+            content = await asyncio.to_thread(
+                self.storage.resolve(representative.storage_uri).read_bytes
+            )
+            frames.append(
+                AlignmentFrameEvidence(
+                    representative_timestamp,
+                    content,
+                    representative.mime_type,
+                    representative.storage_uri,
+                    "representative",
+                )
+            )
+        frames.sort(key=lambda item: (item.timestamp_seconds, item.origin))
+        transcript, truncated = _transcript_evidence(
+            evidence,
+            window_start,
+            window_end,
+            config.max_transcript_characters,
+        )
+        return AlignmentProviderRequest(
+            candidate_id=candidate.id,
+            note_id=note_id,
+            observation=observation,
+            candidate_start_seconds=candidate.start_seconds,
+            candidate_end_seconds=candidate.end_seconds,
+            retrieval_rank=candidate.rank,
+            retrieval_score=candidate.score,
+            pass_name="coarse" if pass_name == "coarse" else "refinement",
+            timestamp_resolution_seconds=plan.resolution_seconds,
+            transcript=transcript,
+            transcript_truncated=truncated,
+            frames=tuple(frames),
+        )
+
+
+class AlignmentProcessor:
+    def __init__(
+        self,
+        db: AsyncSession,
+        storage: Storage,
+        extractor: FrameExtractor,
+        provider: MultimodalAlignmentProvider,
+    ):
+        self.db = db
+        self.storage = storage
+        self.extractor = extractor
+        self.provider = provider
+        self.repository = AlignmentRepository(db)
+
+    async def run(self, job: ProcessingJob) -> None:
+        if job.alignment_run_id is None:
+            raise ValueError("alignment job has no alignment_run_id")
+        run = await self.repository.get_run(job.alignment_run_id)
+        if run is None:
+            raise LookupError("alignment run not found")
+        if run.provider != self.provider.name:
+            raise AlignmentPrerequisiteError("configured alignment provider unavailable")
+        retrieval = await self.repository.retrieval_run(run.retrieval_run_id)
+        media = await self.db.get(MediaAsset, run.media_id)
+        if retrieval is None or media is None:
+            raise LookupError("alignment prerequisites not found")
+        if retrieval.status != "completed":
+            raise AlignmentPrerequisiteError("retrieval run must remain completed")
+        if media.duration_seconds is None or media.duration_seconds <= 0:
+            raise AlignmentPrerequisiteError("media duration is required")
+        await self.storage.delete_derived_namespace(
+            run.project_id,
+            run.session_id,
+            "alignment",
+            run.id,
+        )
+        await self.repository.clear_outputs(run.id)
+        run.status = "processing"
+        run.started_at = datetime.now(UTC)
+        run.completed_at = None
+        run.provider_metadata = None
+        run.usage_metadata = None
+        job.stage = "preparing_evidence"
+        job.progress = 0.02
+        await self.db.commit()
+        config = AlignmentConfig(**run.configuration["frame_sampling"])
+        candidate_ids = {UUID(item) for item in run.configuration["candidate_ids"]}
+        candidates = list(await self.repository.candidates(retrieval.id, candidate_ids))
+        by_subject: dict[str, list[RetrievalCandidate]] = {}
+        for candidate in candidates:
+            by_subject.setdefault(candidate.subject_key, []).append(candidate)
+        specs = await self._subject_specs(
+            retrieval.configuration,
+            run.configuration,
+        )
+        source = self.storage.resolve(media.storage_uri)
+        builder = AlignmentEvidenceBuilder(self.db, self.storage, self.extractor)
+        usage: list[dict[str, Any]] = []
+        provider_meta: list[dict[str, Any]] = []
+        calls = 0
+        processed = 0
+        try:
+            for spec in specs:
+                subject = AlignmentSubject(
+                    alignment_run_id=run.id,
+                    subject_key=spec.subject_key,
+                    note_id=spec.note_id,
+                    observation=spec.observation,
+                    status="pending",
+                )
+                self.db.add(subject)
+                await self.db.flush()
+                pairs: list[tuple[CandidateAlignment, RetrievalCandidate]] = []
+                for candidate in sorted(
+                    by_subject.get(spec.subject_key, []),
+                    key=lambda item: item.rank,
+                ):
+                    result = CandidateAlignment(
+                        alignment_run_id=run.id,
+                        alignment_subject_id=subject.id,
+                        retrieval_candidate_id=candidate.id,
+                        note_id=spec.note_id,
+                        retrieval_rank=candidate.rank,
+                        status="pending",
+                        anchors=[],
+                        pass_count=0,
+                    )
+                    self.db.add(result)
+                    pairs.append((result, candidate))
+                await self.db.commit()
+                if not pairs:
+                    subject.status = "no_candidates"
+                    await self.db.commit()
+                    continue
+                stop = False
+                for result, candidate in pairs:
+                    if stop:
+                        result.status = "not_evaluated"
+                        result.completed_at = datetime.now(UTC)
+                        continue
+                    result.status = "processing"
+                    job.stage = "coarse_alignment"
+                    result.started_at = datetime.now(UTC)
+                    job.progress = 0.05 + 0.90 * processed / max(1, len(candidates))
+                    job.heartbeat_at = datetime.now(UTC)
+                    await self.db.commit()
+                    request = await builder.build(
+                        run=run,
+                        candidate=candidate,
+                        observation=spec.observation,
+                        note_id=spec.note_id,
+                        source=source,
+                        pass_name="coarse",
+                        window_start=candidate.start_seconds,
+                        window_end=candidate.end_seconds,
+                        interval_seconds=config.frame_interval_seconds,
+                        max_frames=config.max_frames,
+                        config=config,
+                    )
+                    response = await self._call(run, candidate, request, "coarse")
+                    calls += 1
+                    self._metadata(response, usage, provider_meta)
+                    final_request = request
+                    final_response = response
+                    if response.result.matched and config.refinement_enabled:
+                        assert response.result.start_seconds is not None
+                        assert response.result.end_seconds is not None
+                        refine_start, refine_end = refinement_window(
+                            response.result.start_seconds,
+                            response.result.end_seconds,
+                            candidate.start_seconds,
+                            candidate.end_seconds,
+                            config.refinement_padding_seconds,
+                        )
+                        job.stage = "refining_alignment"
+                        job.heartbeat_at = datetime.now(UTC)
+                        await self.db.commit()
+                        final_request = await builder.build(
+                            run=run,
+                            candidate=candidate,
+                            observation=spec.observation,
+                            note_id=spec.note_id,
+                            source=source,
+                            pass_name="refinement",
+                            window_start=refine_start,
+                            window_end=refine_end,
+                            interval_seconds=config.refinement_frame_interval_seconds,
+                            max_frames=config.refinement_max_frames,
+                            config=config,
+                        )
+                        final_response = await self._call(
+                            run,
+                            candidate,
+                            final_request,
+                            "refinement",
+                        )
+                        calls += 1
+                        self._metadata(final_response, usage, provider_meta)
+                    self._apply(
+                        result,
+                        final_response,
+                        final_request.timestamp_resolution_seconds,
+                        2 if final_request.pass_name == "refinement" else 1,
+                    )
+                    processed += 1
+                    stop = (
+                        result.status == "matched"
+                        and result.confidence is not None
+                        and result.confidence >= config.early_stop_confidence
+                    )
+                await self.db.commit()
+                matched = [
+                    (result, candidate) for result, candidate in pairs if result.status == "matched"
+                ]
+                if matched:
+                    selected = min(
+                        matched,
+                        key=lambda item: (
+                            -(item[0].confidence or 0.0),
+                            item[1].rank,
+                            -item[1].score,
+                        ),
+                    )[0]
+                    subject.selected_candidate_alignment_id = selected.id
+                    subject.status = "matched"
+                elif all(result.status in {"unmatched", "not_evaluated"} for result, _ in pairs):
+                    subject.status = "unmatched"
+                else:
+                    subject.status = "failed"
+                await self.db.commit()
+            run.status = "completed"
+            run.completed_at = datetime.now(UTC)
+            run.usage_metadata = {"provider_calls": calls, "responses": usage}
+            run.provider_metadata = {"responses": provider_meta}
+            job.stage = "finalizing"
+            job.progress = 0.99
+            job.heartbeat_at = datetime.now(UTC)
+            await self.db.commit()
+            logger.info(
+                "multimodal_alignment_completed",
+                project_id=str(run.project_id),
+                session_id=str(run.session_id),
+                media_id=str(run.media_id),
+                retrieval_run_id=str(run.retrieval_run_id),
+                alignment_run_id=str(run.id),
+                job_id=str(job.id),
+                model=run.model,
+                candidate_count=len(candidates),
+                provider_calls=calls,
+            )
+        except Exception as exc:
+            await self.db.rollback()
+            failed = await self.repository.get_run(run.id)
+            if failed is not None:
+                results, _ = await self.repository.results(run.id, 0, 10000)
+                for result in results:
+                    if result.status == "processing":
+                        result.status = "failed"
+                        result.error = str(exc)[:4000]
+                        result.start_seconds = None
+                        result.completed_at = datetime.now(UTC)
+                        result.end_seconds = None
+                        result.confidence = None
+                for subject in await self.repository.subjects(run.id):
+                    if subject.status == "pending":
+                        subject.status = "failed"
+                failed.status = "failed"
+                failed.completed_at = datetime.now(UTC)
+                failed.provider_metadata = {"error_type": type(exc).__name__}
+                await self.db.commit()
+            logger.exception(
+                "multimodal_alignment_failed",
+                alignment_run_id=str(run.id),
+                job_id=str(job.id),
+                stage=job.stage,
+            )
+            raise
+
+    async def _subject_specs(
+        self,
+        retrieval_configuration: dict[str, Any],
+        alignment_configuration: dict[str, Any],
+    ) -> list[AlignmentSubjectSpec]:
+        allowed = set(alignment_configuration["subject_keys"])
+        specs: list[AlignmentSubjectSpec] = []
+        for item in _subject_definitions(retrieval_configuration):
+            key = item["subject_key"]
+            if key not in allowed:
+                continue
+            raw_note_id = item.get("note_id")
+            note_id = UUID(raw_note_id) if raw_note_id else None
+            if note_id is not None:
+                note = await self.db.get(Note, note_id)
+                if note is None:
+                    raise AlignmentPrerequisiteError("alignment note not found")
+                observation = note.raw
+            else:
+                query = item.get("query")
+                if not isinstance(query, str) or not query:
+                    raise AlignmentPrerequisiteError("query observation missing")
+                observation = query
+            specs.append(AlignmentSubjectSpec(key, note_id, observation))
+        return specs
+
+    async def _call(
+        self,
+        run: AlignmentRun,
+        candidate: RetrievalCandidate,
+        request: AlignmentProviderRequest,
+        pass_name: str,
+    ) -> AlignmentProviderResponse:
+        response = await self.provider.align(request, model=run.model)
+        validate_result_bounds(response.result, request)
+        logger.info(
+            "candidate_alignment_provider_result",
+            alignment_run_id=str(run.id),
+            retrieval_run_id=str(run.retrieval_run_id),
+            candidate_id=str(candidate.id),
+            note_id=str(candidate.note_id) if candidate.note_id else None,
+            model=run.model,
+            pass_name=pass_name,
+            frame_count=len(request.frames),
+            candidate_duration=candidate.end_seconds - candidate.start_seconds,
+            matched=response.result.matched,
+            confidence=response.result.confidence,
+            latency=response.latency_seconds,
+        )
+        return response
+
+    @staticmethod
+    def _metadata(
+        response: AlignmentProviderResponse,
+        usage: list[dict[str, Any]],
+        provider: list[dict[str, Any]],
+    ) -> None:
+        if response.usage_metadata:
+            usage.append(response.usage_metadata)
+        if response.provider_metadata:
+            provider.append(response.provider_metadata)
+
+    @staticmethod
+    def _apply(
+        target: CandidateAlignment,
+        response: AlignmentProviderResponse,
+        resolution_seconds: float,
+        pass_count: int,
+    ) -> None:
+        result = response.result
+        target.status = "matched" if result.matched else "unmatched"
+        target.start_seconds = result.start_seconds
+        target.end_seconds = result.end_seconds
+        target.confidence = result.confidence
+        target.anchors = [anchor.model_dump(mode="json") for anchor in result.anchors]
+        target.reasoning_summary = result.reasoning_summary
+        target.timestamp_resolution_seconds = resolution_seconds
+        target.pass_count = pass_count
+        target.provider_metadata = response.provider_metadata
+        target.usage_metadata = response.usage_metadata
+        target.latency_seconds = response.latency_seconds
+        target.error = None
+        target.completed_at = datetime.now(UTC)
 </file>
 
 <file path="backend/app/services/candidate_retrieval.py">
@@ -5215,6 +6938,88 @@ class FFmpegFrameExtractor:
 
 </file>
 
+<file path="backend/scripts/evaluate_note_alignment.py">
+"""Evaluate note alignments for a real persisted RetrievalRun.
+
+Run from backend:
+    python scripts/evaluate_note_alignment.py --retrieval-run-id UUID
+
+This executes/reuses the configured alignment run, then prints every raw Note,
+candidate decision, selected interval, confidence and timestamp resolution.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import argparse
+import asyncio
+from uuid import UUID
+
+from smoke_multimodal_alignment import execute
+from sqlalchemy import select
+
+from app.core.database import AsyncSessionLocal
+from app.models import CandidateAlignment, Note
+from app.repositories.alignment import AlignmentRepository
+
+
+def format_timestamp(seconds: float | None) -> str:
+    if seconds is None:
+        return "-"
+    total_milliseconds = max(0, round(seconds * 1000))
+    total_seconds, milliseconds = divmod(total_milliseconds, 1000)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{milliseconds:03d}"
+
+
+async def run(retrieval_run_id: UUID) -> None:
+    alignment_run_id = await execute(retrieval_run_id, None)
+    async with AsyncSessionLocal() as db:
+        repository = AlignmentRepository(db)
+        subjects = await repository.subjects(alignment_run_id)
+        for subject in subjects:
+            print()
+            if subject.note_id is not None:
+                note = await db.get(Note, subject.note_id)
+                print(f"NOTE {note.order if note else '?'}:")
+                print(note.raw if note else subject.observation)
+            else:
+                print("QUERY:")
+                print(subject.observation)
+            print(f"OUTCOME: {subject.status}")
+            rows = (
+                await db.execute(
+                    select(CandidateAlignment)
+                    .where(CandidateAlignment.alignment_subject_id == subject.id)
+                    .order_by(CandidateAlignment.retrieval_rank)
+                )
+            ).scalars()
+            for result in rows:
+                selected = "*" if subject.selected_candidate_alignment_id == result.id else " "
+                print(
+                    f"{selected} rank={result.retrieval_rank} "
+                    f"status={result.status} "
+                    f"interval={format_timestamp(result.start_seconds)}-"
+                    f"{format_timestamp(result.end_seconds)} "
+                    f"confidence={result.confidence} "
+                    f"resolution={result.timestamp_resolution_seconds}"
+                )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--retrieval-run-id", type=UUID, required=True)
+    args = parser.parse_args()
+    asyncio.run(run(args.retrieval_run_id))
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
 <file path="backend/scripts/retrieve_note_candidates.py">
 """Retrieve persisted candidates for one real Note.
 
@@ -5346,6 +7151,137 @@ def main() -> None:
     parser.add_argument("--text", required=True)
     args = parser.parse_args()
     asyncio.run(run(args.text))
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="backend/scripts/smoke_multimodal_alignment.py">
+"""Run real multimodal alignment for persisted retrieval candidates.
+
+Run from backend:
+    python scripts/smoke_multimodal_alignment.py \
+        --retrieval-run-id UUID [--candidate-id UUID ...]
+
+Requires PostgreSQL, FFmpeg, source media under STORAGE_ROOT, and a valid
+LiteLLM credential/model alias. No media or image bytes are persisted in JSON.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import argparse
+import asyncio
+from uuid import UUID
+
+from app.core.config import settings
+from app.core.database import AsyncSessionLocal
+from app.repositories.alignment import AlignmentRepository
+from app.services.alignment import (
+    AlignmentConfig,
+    AlignmentProcessor,
+    AlignmentRequest,
+    AlignmentService,
+)
+from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
+from app.services.jobs import JobExecutor, ProcessorRegistry
+from app.services.storage import LocalStorage
+from app.services.visual_tools import FFmpegFrameExtractor
+
+
+def configured_alignment() -> AlignmentConfig:
+    return AlignmentConfig(
+        frame_interval_seconds=settings.alignment_frame_interval_seconds,
+        max_frames=settings.alignment_max_frames,
+        frame_width=settings.alignment_frame_width,
+        jpeg_quality=settings.alignment_jpeg_quality,
+        frame_dedup_tolerance_seconds=(settings.alignment_frame_dedup_tolerance_seconds),
+        max_transcript_characters=settings.alignment_max_transcript_characters,
+        refinement_enabled=settings.alignment_refinement_enabled,
+        refinement_frame_interval_seconds=(settings.alignment_refinement_frame_interval_seconds),
+        refinement_padding_seconds=settings.alignment_refinement_padding_seconds,
+        refinement_max_frames=settings.alignment_refinement_max_frames,
+        early_stop_confidence=settings.alignment_early_stop_confidence,
+    )
+
+
+async def execute(
+    retrieval_run_id: UUID,
+    candidate_ids: tuple[UUID, ...] | None,
+) -> UUID:
+    provider = LiteLLMMultimodalAlignmentProvider(
+        settings.litellm_base_url,
+        settings.litellm_api_key,
+        settings.alignment_timeout_seconds,
+    )
+    storage = LocalStorage(settings.storage_root)
+    extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
+    async with AsyncSessionLocal() as db:
+        ensured = await AlignmentService(
+            db,
+            provider_name=provider.name,
+            max_attempts=settings.job_max_attempts,
+        ).ensure(
+            retrieval_run_id,
+            AlignmentRequest(
+                model=settings.alignment_model,
+                candidate_ids=candidate_ids,
+                config=configured_alignment(),
+            ),
+        )
+        if ensured.job.status != "completed":
+            registry = ProcessorRegistry(
+                {
+                    "multimodal_alignment": lambda active_db: AlignmentProcessor(
+                        active_db,
+                        storage,
+                        extractor,
+                        provider,
+                    )
+                }
+            )
+            if not await JobExecutor(db, registry).execute(ensured.job.id):
+                await db.refresh(ensured.job)
+                raise RuntimeError(ensured.job.error or "alignment job failed")
+        repository = AlignmentRepository(db)
+        run = await repository.get_run(ensured.alignment_run.id)
+        if run is None:
+            raise RuntimeError("alignment run disappeared")
+        results, total = await repository.results(run.id, 0, 1000)
+        assets = await repository.alignment_assets(run.id)
+        print(
+            {
+                "alignment_run_id": str(run.id),
+                "status": run.status,
+                "candidate_results": total,
+                "managed_frames": len(assets),
+                "model": run.model,
+            }
+        )
+        for result in results:
+            print(
+                {
+                    "retrieval_rank": result.retrieval_rank,
+                    "status": result.status,
+                    "start_seconds": result.start_seconds,
+                    "end_seconds": result.end_seconds,
+                    "confidence": result.confidence,
+                    "timestamp_resolution_seconds": (result.timestamp_resolution_seconds),
+                }
+            )
+        return run.id
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--retrieval-run-id", type=UUID, required=True)
+    parser.add_argument("--candidate-id", type=UUID, action="append")
+    args = parser.parse_args()
+    candidate_ids = tuple(args.candidate_id) if args.candidate_id else None
+    asyncio.run(execute(args.retrieval_run_id, candidate_ids))
 
 
 if __name__ == "__main__":
@@ -5708,6 +7644,817 @@ def client(session_factory, tmp_path: Path):
     app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
     with TestClient(app) as test_client:
         yield test_client
+</file>
+
+<file path="backend/tests/test_alignment_provider.py">
+import json
+from uuid import uuid4
+
+import httpx
+import pytest
+
+from app.services.alignment_provider import (
+    AlignmentFrameEvidence,
+    AlignmentProviderError,
+    AlignmentProviderRequest,
+    InvalidAlignmentOutputError,
+    LiteLLMMultimodalAlignmentProvider,
+)
+
+
+class FakeAsyncClient:
+    response: httpx.Response
+    request: dict[str, object]
+    timeout: float
+
+    def __init__(self, *, timeout: float):
+        type(self).timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    async def post(self, url, *, headers, json):
+        type(self).request = {"url": url, "headers": headers, "json": json}
+        return type(self).response
+
+
+def provider_request() -> AlignmentProviderRequest:
+    return AlignmentProviderRequest(
+        candidate_id=uuid4(),
+        note_id=uuid4(),
+        observation="Aprendo o Aard",
+        candidate_start_seconds=30.0,
+        candidate_end_seconds=60.0,
+        retrieval_rank=1,
+        retrieval_score=0.91,
+        pass_name="coarse",
+        timestamp_resolution_seconds=2.0,
+        transcript=(),
+        transcript_truncated=False,
+        frames=(
+            AlignmentFrameEvidence(
+                timestamp_seconds=40.0,
+                content=b"jpeg-bytes",
+                mime_type="image/jpeg",
+                storage_uri="local://frame.jpg",
+                origin="alignment",
+            ),
+        ),
+    )
+
+
+async def test_litellm_alignment_provider_sends_structured_multimodal_contract(
+    monkeypatch,
+) -> None:
+    request = httpx.Request("POST", "http://litellm.test/v1/chat/completions")
+    FakeAsyncClient.response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "id": "chat-1",
+            "model": "alignment-alias",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "matched": True,
+                                "start_seconds": 36.0,
+                                "end_seconds": 52.0,
+                                "confidence": 0.93,
+                                "anchors": [
+                                    {
+                                        "timestamp_seconds": 42.0,
+                                        "description": "Aard tutorial appears",
+                                    }
+                                ],
+                                "reasoning_summary": "Visible evidence supports the interval.",
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.alignment_provider.httpx.AsyncClient",
+        FakeAsyncClient,
+    )
+    provider = LiteLLMMultimodalAlignmentProvider(
+        "http://litellm.test/",
+        "secret",
+        12.5,
+    )
+
+    response = await provider.align(provider_request(), model="alignment-alias")
+
+    assert response.result.matched
+    assert response.result.start_seconds == 36.0
+    assert response.provider_metadata == {
+        "id": "chat-1",
+        "model": "alignment-alias",
+    }
+    assert response.usage_metadata == {
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+    }
+    assert FakeAsyncClient.timeout == 12.5
+    sent = FakeAsyncClient.request
+    assert sent["url"] == "http://litellm.test/v1/chat/completions"
+    assert sent["headers"]["Authorization"] == "Bearer secret"
+    body = sent["json"]
+    assert body["model"] == "alignment-alias"
+    assert body["temperature"] == 0
+    assert body["response_format"]["type"] == "json_schema"
+    user_content = body["messages"][1]["content"]
+    assert any(item["type"] == "image_url" for item in user_content)
+    image = next(item for item in user_content if item["type"] == "image_url")
+    assert image["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "local://frame.jpg" not in json.dumps(body)
+
+
+async def test_litellm_alignment_provider_maps_http_failure_without_retry(
+    monkeypatch,
+) -> None:
+    request = httpx.Request("POST", "http://litellm.test/v1/chat/completions")
+    FakeAsyncClient.response = httpx.Response(503, request=request)
+    monkeypatch.setattr(
+        "app.services.alignment_provider.httpx.AsyncClient",
+        FakeAsyncClient,
+    )
+    provider = LiteLLMMultimodalAlignmentProvider("http://litellm.test", "", 5.0)
+
+    with pytest.raises(AlignmentProviderError, match="HTTP 503") as raised:
+        await provider.align(provider_request(), model="alignment-alias")
+
+    assert raised.value.transient
+    assert "Authorization" not in FakeAsyncClient.request["headers"]
+
+
+async def test_litellm_alignment_provider_rejects_invalid_or_out_of_bounds_output(
+    monkeypatch,
+) -> None:
+    request = httpx.Request("POST", "http://litellm.test/v1/chat/completions")
+    monkeypatch.setattr(
+        "app.services.alignment_provider.httpx.AsyncClient",
+        FakeAsyncClient,
+    )
+    provider = LiteLLMMultimodalAlignmentProvider("http://litellm.test", "", 5.0)
+
+    FakeAsyncClient.response = httpx.Response(
+        200,
+        request=request,
+        json={"choices": [{"message": {"content": "not-json"}}]},
+    )
+    with pytest.raises(InvalidAlignmentOutputError, match="invalid structured"):
+        await provider.align(provider_request(), model="alignment-alias")
+
+    FakeAsyncClient.response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "matched": True,
+                                "start_seconds": 20.0,
+                                "end_seconds": 40.0,
+                                "confidence": 0.8,
+                                "anchors": [],
+                                "reasoning_summary": None,
+                            }
+                        )
+                    }
+                }
+            ]
+        },
+    )
+    with pytest.raises(InvalidAlignmentOutputError, match="outside"):
+        await provider.align(provider_request(), model="alignment-alias")
+</file>
+
+<file path="backend/tests/test_alignment.py">
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import func, select
+
+from app.models import (
+    AlignmentSubject,
+    CandidateAlignment,
+    DerivedAsset,
+    MediaAsset,
+    MediaProject,
+    MediaSession,
+    Note,
+    RetrievalCandidate,
+    RetrievalRun,
+    TemporalIndex,
+    Transcription,
+    TranscriptSegment,
+    VisualIndex,
+)
+from app.repositories.alignment import AlignmentRepository
+from app.services.alignment import (
+    AlignmentConfig,
+    AlignmentProcessor,
+    AlignmentRequest,
+    AlignmentService,
+    refinement_window,
+    sample_frame_timestamps,
+)
+from app.services.alignment_provider import (
+    AlignmentAnchor,
+    AlignmentProviderError,
+    AlignmentProviderRequest,
+    AlignmentProviderResponse,
+    AlignmentProviderResult,
+    InvalidAlignmentOutputError,
+    validate_result_bounds,
+)
+from app.services.jobs import JobExecutor, ProcessorRegistry
+from app.services.storage import LocalStorage
+from app.services.visual_tools import ExtractedFrame
+
+
+class FakeFrameExtractor:
+    name = "fake"
+
+    def __init__(self):
+        self.timestamps: list[float] = []
+
+    async def extract(
+        self,
+        source: Path,
+        timestamp_seconds: float,
+        width: int,
+        image_format: str,
+        jpeg_quality: int,
+    ) -> ExtractedFrame:
+        self.timestamps.append(timestamp_seconds)
+        assert width > 0
+        assert image_format == "jpeg"
+        assert 1 <= jpeg_quality <= 100
+        return ExtractedFrame(
+            content=f"jpeg:{timestamp_seconds:.3f}".encode(),
+            mime_type="image/jpeg",
+            width=width,
+            height=360,
+        )
+
+
+class FakeAlignmentProvider:
+    name = "fake"
+
+    def __init__(
+        self,
+        results: list[AlignmentProviderResult] | None = None,
+        *,
+        error: Exception | None = None,
+    ):
+        self.results = list(results or [])
+        self.error = error
+        self.requests: list[AlignmentProviderRequest] = []
+
+    async def align(
+        self,
+        request: AlignmentProviderRequest,
+        *,
+        model: str,
+    ) -> AlignmentProviderResponse:
+        assert model
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        if not self.results:
+            raise AssertionError("fake provider has no scripted result")
+        return AlignmentProviderResponse(
+            result=self.results.pop(0),
+            provider_metadata={"request_id": f"fake-{len(self.requests)}"},
+            usage_metadata={"total_tokens": 10},
+            latency_seconds=0.01,
+        )
+
+
+def matched(start: float, end: float, confidence: float) -> AlignmentProviderResult:
+    return AlignmentProviderResult(
+        matched=True,
+        start_seconds=start,
+        end_seconds=end,
+        confidence=confidence,
+        anchors=[
+            AlignmentAnchor(
+                timestamp_seconds=(start + end) / 2,
+                description="visible event",
+            )
+        ],
+        reasoning_summary="The evidence supports this interval.",
+    )
+
+
+def unmatched(confidence: float = 0.8) -> AlignmentProviderResult:
+    return AlignmentProviderResult(
+        matched=False,
+        start_seconds=None,
+        end_seconds=None,
+        confidence=confidence,
+        anchors=[],
+        reasoning_summary="The event is not visible in this window.",
+    )
+
+
+async def seed_alignment_domain(
+    db,
+    *,
+    candidate_count: int = 2,
+    completed: bool = True,
+    query: bool = False,
+):
+    project = MediaProject(name=f"alignment-{uuid4()}")
+    db.add(project)
+    await db.flush()
+    media = MediaAsset(
+        project_id=project.id,
+        storage_uri=f"local://sources/{uuid4()}.mp4",
+        original_filename="gameplay.mp4",
+        content_type="video/mp4",
+        byte_size=1,
+        sha256="a" * 64,
+        duration_seconds=180.0,
+    )
+    db.add(media)
+    await db.flush()
+    session = MediaSession(
+        project_id=project.id,
+        media_id=media.id,
+        label="gameplay",
+        notes_filename="notes.txt",
+        raw_notes="  Aprendo o Aard, primeiro sinal...  ",
+        status="ready",
+    )
+    db.add(session)
+    await db.flush()
+    note = Note(
+        session_id=session.id,
+        order=1,
+        raw="  Aprendo o Aard, primeiro sinal...  ",
+    )
+    transcription = Transcription(
+        project_id=project.id,
+        session_id=session.id,
+        media_id=media.id,
+        provider="fake",
+        model="small",
+        status="completed",
+        configuration={},
+        configuration_fingerprint=uuid4().hex,
+        duration_seconds=180.0,
+    )
+    visual = VisualIndex(
+        project_id=project.id,
+        session_id=session.id,
+        media_id=media.id,
+        status="completed",
+        detector="fake",
+        configuration={},
+        configuration_fingerprint=uuid4().hex,
+    )
+    db.add_all([note, transcription, visual])
+    await db.flush()
+    temporal = TemporalIndex(
+        project_id=project.id,
+        session_id=session.id,
+        media_id=media.id,
+        transcription_id=transcription.id,
+        visual_index_id=visual.id,
+        status="completed",
+        configuration={},
+        configuration_fingerprint=uuid4().hex,
+        embedding_provider="fake",
+        embedding_model="fake",
+        embedding_dimensions=1024,
+    )
+    db.add(temporal)
+    await db.flush()
+    db.add_all(
+        [
+            TranscriptSegment(
+                transcription_id=transcription.id,
+                sequence=1,
+                start_seconds=32.0,
+                end_seconds=52.0,
+                text="Geralt aprende o sinal Aard",
+            ),
+            TranscriptSegment(
+                transcription_id=transcription.id,
+                sequence=2,
+                start_seconds=92.0,
+                end_seconds=112.0,
+                text="combate distante",
+            ),
+        ]
+    )
+    subject_key = "query" if query else f"note:{note.id}"
+    subject = (
+        {"subject_key": subject_key, "query": "Geralt learning Aard"}
+        if query
+        else {"subject_key": subject_key, "note_id": str(note.id)}
+    )
+    retrieval = RetrievalRun(
+        project_id=project.id,
+        session_id=session.id,
+        media_id=media.id,
+        temporal_index_id=temporal.id,
+        kind="query" if query else "notes",
+        strategy="semantic_temporal_v1",
+        status="completed" if completed else "processing",
+        query_text="Geralt learning Aard" if query else None,
+        configuration={"subjects": [subject]},
+        configuration_fingerprint=uuid4().hex,
+    )
+    db.add(retrieval)
+    await db.flush()
+    candidates = []
+    for rank, (start, end, score) in enumerate(
+        [(30.0, 60.0, 0.94), (90.0, 120.0, 0.78)][:candidate_count],
+        start=1,
+    ):
+        candidate = RetrievalCandidate(
+            retrieval_run_id=retrieval.id,
+            note_id=None if query else note.id,
+            subject_key=subject_key,
+            rank=rank,
+            start_seconds=start,
+            end_seconds=end,
+            duration_seconds=end - start,
+            score=score,
+            score_components={"semantic_max": score},
+        )
+        db.add(candidate)
+        candidates.append(candidate)
+    await db.commit()
+    return {
+        "project": project,
+        "session": session,
+        "media": media,
+        "note": note,
+        "retrieval": retrieval,
+        "candidates": candidates,
+    }
+
+
+def test_sampling_bounds_and_refinement_are_deterministic() -> None:
+    plan = sample_frame_timestamps(30.0, 60.0, 2.0, 4)
+    assert plan.timestamps == (30.0, 40.0, 50.0, 60.0)
+    assert plan.resolution_seconds == 10.0
+    assert sample_frame_timestamps(0.0, 5.0, 2.0, 10).timestamps == (0.0, 2.0, 4.0)
+    assert refinement_window(40.0, 50.0, 30.0, 60.0, 4.0) == (36.0, 54.0)
+    with pytest.raises(ValueError, match="invalid alignment frame window"):
+        sample_frame_timestamps(-1.0, 5.0, 2.0, 3)
+
+
+def test_provider_result_contract_rejects_invalid_shapes_and_bounds() -> None:
+    request = AlignmentProviderRequest(
+        candidate_id=uuid4(),
+        note_id=None,
+        observation="event",
+        candidate_start_seconds=10.0,
+        candidate_end_seconds=20.0,
+        retrieval_rank=1,
+        retrieval_score=0.9,
+        pass_name="coarse",
+        timestamp_resolution_seconds=2.0,
+        transcript=(),
+        transcript_truncated=False,
+        frames=(),
+    )
+    validate_result_bounds(matched(12.0, 18.0, 0.9), request)
+    with pytest.raises(InvalidAlignmentOutputError, match="outside"):
+        validate_result_bounds(matched(9.0, 18.0, 0.9), request)
+    with pytest.raises(ValueError, match="null timestamps"):
+        AlignmentProviderResult(
+            matched=False,
+            start_seconds=12.0,
+            end_seconds=13.0,
+            confidence=0.4,
+        )
+    with pytest.raises(ValueError):
+        AlignmentProviderResult(
+            matched=True,
+            start_seconds=12.0,
+            end_seconds=13.0,
+            confidence=1.2,
+        )
+
+
+async def test_alignment_job_matches_early_stops_persists_frames_and_is_idempotent(
+    session_factory,
+    tmp_path,
+) -> None:
+    storage = LocalStorage(tmp_path)
+    extractor = FakeFrameExtractor()
+    provider = FakeAlignmentProvider([matched(36.0, 52.0, 0.95)])
+    async with session_factory() as db:
+        domain = await seed_alignment_domain(db)
+        request = AlignmentRequest(
+            model="alignment-alias",
+            candidate_ids=None,
+            config=AlignmentConfig(max_frames=4),
+        )
+        service = AlignmentService(db, provider_name="fake", max_attempts=3)
+        ensured = await service.ensure(domain["retrieval"].id, request)
+        repeated = await service.ensure(domain["retrieval"].id, request)
+        changed = await service.ensure(
+            domain["retrieval"].id,
+            AlignmentRequest("different-model", None, AlignmentConfig(max_frames=4)),
+        )
+        assert ensured.created and ensured.enqueue
+        assert not repeated.created and repeated.alignment_run.id == ensured.alignment_run.id
+        assert changed.alignment_run.id != ensured.alignment_run.id
+
+        registry = ProcessorRegistry(
+            {
+                "multimodal_alignment": lambda active_db: AlignmentProcessor(
+                    active_db,
+                    storage,
+                    extractor,
+                    provider,
+                )
+            }
+        )
+        assert await JobExecutor(db, registry).execute(ensured.job.id)
+        await db.refresh(ensured.alignment_run)
+        await db.refresh(ensured.job)
+        await db.refresh(domain["session"])
+        results, total = await AlignmentRepository(db).results(ensured.alignment_run.id)
+        subjects = await AlignmentRepository(db).subjects(ensured.alignment_run.id)
+        assets = await AlignmentRepository(db).alignment_assets(ensured.alignment_run.id)
+
+        assert ensured.alignment_run.status == "completed"
+        assert ensured.job.status == "completed"
+        assert domain["session"].status == "ready"
+        assert total == 2
+        assert [item.status for item in results] == ["matched", "not_evaluated"]
+        assert results[0].started_at is not None and results[0].completed_at is not None
+        assert results[1].started_at is None
+        assert results[1].completed_at is not None
+        assert subjects[0].status == "matched"
+        assert subjects[0].selected_candidate_alignment_id == results[0].id
+        assert provider.requests[0].observation == domain["note"].raw
+        assert [item.timestamp_seconds for item in assets] == [30.0, 40.0, 50.0, 60.0]
+        assert all(item.kind == "alignment_frame" for item in assets)
+        assert all(storage.resolve(item.storage_uri).exists() for item in assets)
+        assert ensured.alignment_run.usage_metadata["provider_calls"] == 1
+
+
+async def test_unmatched_and_no_candidates_are_valid_completed_outcomes(
+    session_factory,
+    tmp_path,
+) -> None:
+    async with session_factory() as db:
+        domain = await seed_alignment_domain(db)
+        provider = FakeAlignmentProvider([unmatched(0.8), unmatched(0.7)])
+        request = AlignmentRequest(
+            "alignment-alias",
+            None,
+            AlignmentConfig(max_frames=1),
+        )
+        ensured = await AlignmentService(
+            db,
+            provider_name="fake",
+            max_attempts=3,
+        ).ensure(domain["retrieval"].id, request)
+        processor = AlignmentProcessor(
+            db,
+            LocalStorage(tmp_path),
+            FakeFrameExtractor(),
+            provider,
+        )
+        registry = ProcessorRegistry({"multimodal_alignment": lambda _: processor})
+        assert await JobExecutor(db, registry).execute(ensured.job.id)
+        subjects = await AlignmentRepository(db).subjects(ensured.alignment_run.id)
+        results, _ = await AlignmentRepository(db).results(ensured.alignment_run.id)
+        assert subjects[0].status == "unmatched"
+        assert all(item.status == "unmatched" for item in results)
+        assert all(item.start_seconds is None and item.end_seconds is None for item in results)
+
+    async with session_factory() as db:
+        domain = await seed_alignment_domain(db, candidate_count=0, query=True)
+        provider = FakeAlignmentProvider([])
+        ensured = await AlignmentService(
+            db,
+            provider_name="fake",
+            max_attempts=3,
+        ).ensure(
+            domain["retrieval"].id,
+            AlignmentRequest("alignment-alias", None, AlignmentConfig(max_frames=1)),
+        )
+        registry = ProcessorRegistry(
+            {
+                "multimodal_alignment": lambda active_db: AlignmentProcessor(
+                    active_db,
+                    LocalStorage(tmp_path),
+                    FakeFrameExtractor(),
+                    provider,
+                )
+            }
+        )
+        assert await JobExecutor(db, registry).execute(ensured.job.id)
+        subjects = await AlignmentRepository(db).subjects(ensured.alignment_run.id)
+        assert subjects[0].status == "no_candidates"
+        assert provider.requests == []
+
+
+async def test_provider_failure_is_failed_not_unmatched_and_retry_rebuilds(
+    session_factory,
+    tmp_path,
+) -> None:
+    provider = FakeAlignmentProvider(
+        error=AlignmentProviderError("temporary upstream failure", transient=True)
+    )
+    storage = LocalStorage(tmp_path)
+    async with session_factory() as db:
+        domain = await seed_alignment_domain(db, candidate_count=1)
+        request = AlignmentRequest(
+            "alignment-alias",
+            None,
+            AlignmentConfig(max_frames=2),
+        )
+        service = AlignmentService(db, provider_name="fake", max_attempts=3)
+        ensured = await service.ensure(domain["retrieval"].id, request)
+        registry = ProcessorRegistry(
+            {
+                "multimodal_alignment": lambda active_db: AlignmentProcessor(
+                    active_db,
+                    storage,
+                    FakeFrameExtractor(),
+                    provider,
+                )
+            }
+        )
+        assert not await JobExecutor(db, registry).execute(ensured.job.id)
+        await db.refresh(ensured.alignment_run)
+        failed_results, _ = await AlignmentRepository(db).results(ensured.alignment_run.id)
+        assert ensured.alignment_run.status == "failed"
+        assert failed_results[0].status == "failed"
+        assert (
+            failed_results[0].started_at is not None and failed_results[0].completed_at is not None
+        )
+        assert "temporary upstream failure" in (failed_results[0].error or "")
+
+        provider.error = None
+        provider.results = [matched(36.0, 50.0, 0.88)]
+        retry = await service.ensure(domain["retrieval"].id, request)
+        assert retry.enqueue and not retry.created
+        assert retry.alignment_run.id == ensured.alignment_run.id
+        assert await JobExecutor(db, registry).execute(retry.job.id)
+        rebuilt, total = await AlignmentRepository(db).results(retry.alignment_run.id)
+        asset_count = await db.scalar(
+            select(func.count())
+            .select_from(DerivedAsset)
+            .where(DerivedAsset.alignment_run_id == retry.alignment_run.id)
+        )
+        assert total == 1
+        assert rebuilt[0].status == "matched"
+        assert asset_count == 2
+        assert await db.scalar(select(func.count()).select_from(AlignmentSubject)) == 1
+        assert await db.scalar(select(func.count()).select_from(CandidateAlignment)) == 1
+
+
+async def test_alignment_api_create_idempotency_queries_and_prerequisite(
+    client,
+    session_factory,
+) -> None:
+    async with session_factory() as db:
+        domain = await seed_alignment_domain(db)
+        run_id = domain["retrieval"].id
+        candidate_id = domain["candidates"][0].id
+
+    response = client.post(
+        f"/retrieval-runs/{run_id}/alignments",
+        json={"candidate_ids": [str(candidate_id)], "max_frames": 3},
+    )
+    assert response.status_code == 202
+    payload = response.json()
+    alignment_run_id = payload["alignment_run"]["id"]
+    assert payload["created"] is True
+    assert payload["job"]["job_type"] == "multimodal_alignment"
+    assert payload["job"]["alignment_run_id"] == alignment_run_id
+
+    repeated = client.post(
+        f"/retrieval-runs/{run_id}/alignments",
+        json={"candidate_ids": [str(candidate_id)], "max_frames": 3},
+    )
+    assert repeated.status_code == 202
+    assert repeated.json()["created"] is False
+    assert repeated.json()["alignment_run"]["id"] == alignment_run_id
+
+    detail = client.get(f"/alignment-runs/{alignment_run_id}")
+    results = client.get(f"/alignment-runs/{alignment_run_id}/results?offset=0&limit=10")
+    assert detail.status_code == 200
+    assert detail.json()["alignment_run"]["status"] == "pending"
+    assert detail.json()["subjects"] == []
+    assert results.status_code == 200
+    assert results.json()["total"] == 0
+
+    missing_candidate = client.post(
+        f"/retrieval-runs/{run_id}/alignments",
+        json={"candidate_ids": [str(uuid4())]},
+    )
+    assert missing_candidate.status_code == 409
+
+    async with session_factory() as db:
+        incomplete = await seed_alignment_domain(db, completed=False)
+        incomplete_id = incomplete["retrieval"].id
+    blocked = client.post(
+        f"/retrieval-runs/{incomplete_id}/alignments",
+        json={},
+    )
+    assert blocked.status_code == 409
+
+
+async def test_alignment_stale_recovery_and_attempt_limit_preserve_session(
+    session_factory,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    async with session_factory() as db:
+        domain = await seed_alignment_domain(db, candidate_count=1)
+        ensured = await AlignmentService(
+            db,
+            provider_name="fake",
+            max_attempts=2,
+        ).ensure(
+            domain["retrieval"].id,
+            AlignmentRequest(
+                "alignment-alias",
+                None,
+                AlignmentConfig(max_frames=1),
+            ),
+        )
+        old = datetime.now(UTC) - timedelta(minutes=10)
+        ensured.job.status = "processing"
+        ensured.job.attempt_count = 1
+        ensured.job.heartbeat_at = old
+        ensured.alignment_run.status = "processing"
+        await db.commit()
+
+        recovered = await JobExecutor(db, ProcessorRegistry()).recover(
+            datetime.now(UTC) - timedelta(minutes=5)
+        )
+        await db.refresh(ensured.job)
+        await db.refresh(ensured.alignment_run)
+        assert recovered == [ensured.job.id]
+        assert ensured.job.status == "pending"
+        assert ensured.alignment_run.status == "pending"
+
+        partial_subject = AlignmentSubject(
+            alignment_run_id=ensured.alignment_run.id,
+            subject_key=f"note:{domain['note'].id}",
+            note_id=domain["note"].id,
+            observation=domain["note"].raw,
+            status="pending",
+        )
+        db.add(partial_subject)
+        await db.flush()
+        partial_result = CandidateAlignment(
+            alignment_run_id=ensured.alignment_run.id,
+            alignment_subject_id=partial_subject.id,
+            retrieval_candidate_id=domain["candidates"][0].id,
+            note_id=domain["note"].id,
+            retrieval_rank=1,
+            status="processing",
+            anchors=[],
+            pass_count=0,
+            started_at=old,
+        )
+        db.add(partial_result)
+        ensured.job.status = "processing"
+        ensured.job.attempt_count = ensured.job.max_attempts
+        ensured.job.heartbeat_at = old
+        ensured.alignment_run.status = "processing"
+        await db.commit()
+        recovered = await JobExecutor(db, ProcessorRegistry()).recover(
+            datetime.now(UTC) - timedelta(minutes=5)
+        )
+        await db.refresh(ensured.job)
+        await db.refresh(ensured.alignment_run)
+        await db.refresh(partial_subject)
+        await db.refresh(partial_result)
+        assert partial_subject.status == "failed"
+        assert partial_result.status == "failed" and partial_result.completed_at is not None
+        await db.refresh(domain["session"])
+        assert recovered == []
+        assert ensured.job.status == "failed"
+        assert ensured.alignment_run.status == "failed"
+        assert domain["session"].status == "ready"
 </file>
 
 <file path="backend/tests/test_api.py">
@@ -8544,167 +11291,6 @@ class IngestionService:
             raise
 </file>
 
-<file path="backend/app/services/jobs.py">
-from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
-from typing import Protocol
-from uuid import UUID
-
-import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import MediaSession, ProcessingJob, TemporalIndex, Transcription, VisualIndex
-from app.repositories.domain import JobRepository
-
-logger = structlog.get_logger(__name__)
-
-
-class JobProcessor(Protocol):
-    async def run(self, job: ProcessingJob) -> None: ...
-
-
-ProcessorFactory = Callable[[AsyncSession], JobProcessor]
-
-
-class UnknownJobTypeError(LookupError):
-    pass
-
-
-class ProcessorRegistry:
-    def __init__(self, factories: dict[str, ProcessorFactory] | None = None):
-        self._factories = factories or {}
-
-    def register(self, job_type: str, factory: ProcessorFactory) -> None:
-        self._factories[job_type] = factory
-
-    def create(self, job_type: str, db: AsyncSession) -> JobProcessor:
-        factory = self._factories.get(job_type)
-        if factory is None:
-            raise UnknownJobTypeError(f"unknown job type: {job_type}")
-        return factory(db)
-
-
-class JobExecutor:
-    def __init__(self, db: AsyncSession, registry: ProcessorRegistry):
-        self.db = db
-        self.registry = registry
-
-    async def execute(self, job_id: UUID) -> bool:
-        job = await JobRepository(self.db).get(job_id)
-        if job is None or job.status != "pending":
-            return False
-        if job.attempt_count >= job.max_attempts:
-            await self._fail(job, "attempt limit reached")
-            return False
-
-        now = datetime.now(UTC)
-        job.status = "processing"
-        job.stage = "starting"
-        job.attempt_count += 1
-        job.started_at = job.started_at or now
-        job.completed_at = None
-        job.heartbeat_at = now
-        job.error = None
-        await self.db.commit()
-
-        try:
-            processor = self.registry.create(job.job_type, self.db)
-            await processor.run(job)
-            job.status = "completed"
-            job.stage = "completed"
-            job.progress = 1.0
-            job.heartbeat_at = datetime.now(UTC)
-            job.completed_at = datetime.now(UTC)
-            await self.db.commit()
-            logger.info(
-                "job_completed",
-                job_id=str(job.id),
-                job_type=job.job_type,
-                attempt=job.attempt_count,
-            )
-            return True
-        except Exception as exc:
-            await self.db.rollback()
-            job = await JobRepository(self.db).get(job_id)
-            if job is not None:
-                await self._fail(job, str(exc)[:4000])
-            logger.exception("job_failed", job_id=str(job_id))
-            return False
-
-    async def heartbeat(self, job_id: UUID) -> bool:
-        job = await JobRepository(self.db).get(job_id)
-        if job is None or job.status != "processing":
-            return False
-        job.heartbeat_at = datetime.now(UTC)
-        await self.db.commit()
-        return True
-
-    async def recover(self, stale_before: datetime) -> Sequence[UUID]:
-        jobs = await JobRepository(self.db).recoverable(stale_before)
-        recovered: list[UUID] = []
-        for job in jobs:
-            stale = job.status == "processing"
-            if stale and job.attempt_count >= job.max_attempts:
-                await self._fail(job, "stale job reached attempt limit", commit=False)
-                continue
-            if job.status == "pending" and job.attempt_count >= job.max_attempts:
-                await self._fail(job, "attempt limit reached", commit=False)
-                continue
-            if stale:
-                job.status = "pending"
-                job.stage = "recovered"
-                job.progress = 0.0
-                job.error = None
-                job.completed_at = None
-                job.heartbeat_at = None
-                if job.transcription_id is not None:
-                    transcription = await self.db.get(Transcription, job.transcription_id)
-                    if transcription is not None:
-                        transcription.status = "pending"
-                        transcription.completed_at = None
-                elif job.visual_index_id is not None:
-                    visual_index = await self.db.get(VisualIndex, job.visual_index_id)
-                    if visual_index is not None:
-                        visual_index.status = "pending"
-                        visual_index.completed_at = None
-                elif job.temporal_index_id is not None:
-                    temporal_index = await self.db.get(TemporalIndex, job.temporal_index_id)
-                    if temporal_index is not None:
-                        temporal_index.status = "pending"
-                        temporal_index.completed_at = None
-            recovered.append(job.id)
-        await self.db.commit()
-        return recovered
-
-    async def _fail(self, job: ProcessingJob, error: str, *, commit: bool = True) -> None:
-        job.status = "failed"
-        job.stage = "failed"
-        job.error = error
-        job.completed_at = datetime.now(UTC)
-        job.heartbeat_at = datetime.now(UTC)
-        if job.transcription_id is not None:
-            transcription = await self.db.get(Transcription, job.transcription_id)
-            if transcription is not None:
-                transcription.status = "failed"
-                transcription.completed_at = datetime.now(UTC)
-        elif job.visual_index_id is not None:
-            visual_index = await self.db.get(VisualIndex, job.visual_index_id)
-            if visual_index is not None:
-                visual_index.status = "failed"
-                visual_index.completed_at = datetime.now(UTC)
-        elif job.temporal_index_id is not None:
-            temporal_index = await self.db.get(TemporalIndex, job.temporal_index_id)
-            if temporal_index is not None:
-                temporal_index.status = "failed"
-                temporal_index.completed_at = datetime.now(UTC)
-        elif job.job_type == "initial_index":
-            session = await self.db.get(MediaSession, job.session_id)
-            if session is not None:
-                session.status = "failed"
-        if commit:
-            await self.db.commit()
-</file>
-
 <file path="backend/app/services/storage.py">
 import asyncio
 import hashlib
@@ -8894,6 +11480,204 @@ httpx==0.27.*
 faster-whisper==1.2.*
 </file>
 
+<file path="backend/app/services/jobs.py">
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from typing import Protocol
+from uuid import UUID
+
+import structlog
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import (
+    AlignmentRun,
+    AlignmentSubject,
+    CandidateAlignment,
+    MediaSession,
+    ProcessingJob,
+    TemporalIndex,
+    Transcription,
+    VisualIndex,
+)
+from app.repositories.domain import JobRepository
+
+logger = structlog.get_logger(__name__)
+
+
+class JobProcessor(Protocol):
+    async def run(self, job: ProcessingJob) -> None: ...
+
+
+ProcessorFactory = Callable[[AsyncSession], JobProcessor]
+
+
+class UnknownJobTypeError(LookupError):
+    pass
+
+
+class ProcessorRegistry:
+    def __init__(self, factories: dict[str, ProcessorFactory] | None = None):
+        self._factories = factories or {}
+
+    def register(self, job_type: str, factory: ProcessorFactory) -> None:
+        self._factories[job_type] = factory
+
+    def create(self, job_type: str, db: AsyncSession) -> JobProcessor:
+        factory = self._factories.get(job_type)
+        if factory is None:
+            raise UnknownJobTypeError(f"unknown job type: {job_type}")
+        return factory(db)
+
+
+class JobExecutor:
+    def __init__(self, db: AsyncSession, registry: ProcessorRegistry):
+        self.db = db
+        self.registry = registry
+
+    async def execute(self, job_id: UUID) -> bool:
+        job = await JobRepository(self.db).get(job_id)
+        if job is None or job.status != "pending":
+            return False
+        if job.attempt_count >= job.max_attempts:
+            await self._fail(job, "attempt limit reached")
+            return False
+
+        now = datetime.now(UTC)
+        job.status = "processing"
+        job.stage = "starting"
+        job.attempt_count += 1
+        job.started_at = job.started_at or now
+        job.completed_at = None
+        job.heartbeat_at = now
+        job.error = None
+        await self.db.commit()
+
+        try:
+            processor = self.registry.create(job.job_type, self.db)
+            await processor.run(job)
+            job.status = "completed"
+            job.stage = "completed"
+            job.progress = 1.0
+            job.heartbeat_at = datetime.now(UTC)
+            job.completed_at = datetime.now(UTC)
+            await self.db.commit()
+            logger.info(
+                "job_completed",
+                job_id=str(job.id),
+                job_type=job.job_type,
+                attempt=job.attempt_count,
+            )
+            return True
+        except Exception as exc:
+            await self.db.rollback()
+            job = await JobRepository(self.db).get(job_id)
+            if job is not None:
+                await self._fail(job, str(exc)[:4000])
+            logger.exception("job_failed", job_id=str(job_id))
+            return False
+
+    async def heartbeat(self, job_id: UUID) -> bool:
+        job = await JobRepository(self.db).get(job_id)
+        if job is None or job.status != "processing":
+            return False
+        job.heartbeat_at = datetime.now(UTC)
+        await self.db.commit()
+        return True
+
+    async def recover(self, stale_before: datetime) -> Sequence[UUID]:
+        jobs = await JobRepository(self.db).recoverable(stale_before)
+        recovered: list[UUID] = []
+        for job in jobs:
+            stale = job.status == "processing"
+            if stale and job.attempt_count >= job.max_attempts:
+                await self._fail(job, "stale job reached attempt limit", commit=False)
+                continue
+            if job.status == "pending" and job.attempt_count >= job.max_attempts:
+                await self._fail(job, "attempt limit reached", commit=False)
+                continue
+            if stale:
+                job.status = "pending"
+                job.stage = "recovered"
+                job.progress = 0.0
+                job.error = None
+                job.completed_at = None
+                job.heartbeat_at = None
+                if job.transcription_id is not None:
+                    transcription = await self.db.get(Transcription, job.transcription_id)
+                    if transcription is not None:
+                        transcription.status = "pending"
+                        transcription.completed_at = None
+                elif job.visual_index_id is not None:
+                    visual_index = await self.db.get(VisualIndex, job.visual_index_id)
+                    if visual_index is not None:
+                        visual_index.status = "pending"
+                        visual_index.completed_at = None
+                elif job.temporal_index_id is not None:
+                    temporal_index = await self.db.get(TemporalIndex, job.temporal_index_id)
+                    if temporal_index is not None:
+                        temporal_index.status = "pending"
+                        temporal_index.completed_at = None
+                elif job.alignment_run_id is not None:
+                    alignment_run = await self.db.get(AlignmentRun, job.alignment_run_id)
+                    if alignment_run is not None:
+                        alignment_run.status = "pending"
+                        alignment_run.completed_at = None
+            recovered.append(job.id)
+        await self.db.commit()
+        return recovered
+
+    async def _fail(self, job: ProcessingJob, error: str, *, commit: bool = True) -> None:
+        job.status = "failed"
+        job.stage = "failed"
+        job.error = error
+        job.completed_at = datetime.now(UTC)
+        job.heartbeat_at = datetime.now(UTC)
+        if job.transcription_id is not None:
+            transcription = await self.db.get(Transcription, job.transcription_id)
+            if transcription is not None:
+                transcription.status = "failed"
+                transcription.completed_at = datetime.now(UTC)
+        elif job.visual_index_id is not None:
+            visual_index = await self.db.get(VisualIndex, job.visual_index_id)
+            if visual_index is not None:
+                visual_index.status = "failed"
+                visual_index.completed_at = datetime.now(UTC)
+        elif job.temporal_index_id is not None:
+            temporal_index = await self.db.get(TemporalIndex, job.temporal_index_id)
+            if temporal_index is not None:
+                temporal_index.status = "failed"
+                temporal_index.completed_at = datetime.now(UTC)
+        elif job.alignment_run_id is not None:
+            alignment_run = await self.db.get(AlignmentRun, job.alignment_run_id)
+            if alignment_run is not None:
+                now = datetime.now(UTC)
+                alignment_run.status = "failed"
+                alignment_run.completed_at = now
+                await self.db.execute(
+                    update(CandidateAlignment)
+                    .where(
+                        CandidateAlignment.alignment_run_id == alignment_run.id,
+                        CandidateAlignment.status == "processing",
+                    )
+                    .values(status="failed", error=error, completed_at=now)
+                )
+                await self.db.execute(
+                    update(AlignmentSubject)
+                    .where(
+                        AlignmentSubject.alignment_run_id == alignment_run.id,
+                        AlignmentSubject.status == "pending",
+                    )
+                    .values(status="failed")
+                )
+        elif job.job_type == "initial_index":
+            session = await self.db.get(MediaSession, job.session_id)
+            if session is not None:
+                session.status = "failed"
+        if commit:
+            await self.db.commit()
+</file>
+
 <file path="backend/app/core/config.py">
 from functools import lru_cache
 from pathlib import Path
@@ -8949,6 +11733,20 @@ class Settings(BaseSettings):
     candidate_context_after_seconds: float = 20.0
     candidate_max_duration_seconds: float = 120.0
 
+    alignment_model: str = "alignment-flash"
+    alignment_timeout_seconds: float = 120.0
+    alignment_frame_interval_seconds: float = 2.0
+    alignment_max_frames: int = 60
+    alignment_frame_width: int = 640
+    alignment_jpeg_quality: int = 82
+    alignment_frame_dedup_tolerance_seconds: float = 0.25
+    alignment_max_transcript_characters: int = 12000
+    alignment_refinement_enabled: bool = False
+    alignment_refinement_frame_interval_seconds: float = 0.5
+    alignment_refinement_padding_seconds: float = 4.0
+    alignment_refinement_max_frames: int = 40
+    alignment_early_stop_confidence: float = 0.90
+
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
     whisper_word_timestamps: bool = True
@@ -8966,6 +11764,9 @@ settings = get_settings()
 from app.models.base import Base
 from app.models.entities import (
     EMBEDDING_VECTOR_DIMENSIONS,
+    AlignmentRun,
+    AlignmentSubject,
+    CandidateAlignment,
     DerivedAsset,
     MediaAsset,
     MediaProject,
@@ -8989,6 +11790,9 @@ from app.models.entities import (
 __all__ = [
     "Base",
     "EMBEDDING_VECTOR_DIMENSIONS",
+    "AlignmentRun",
+    "AlignmentSubject",
+    "CandidateAlignment",
     "DerivedAsset",
     "MediaAsset",
     "MediaProject",
@@ -9209,6 +12013,9 @@ class DerivedAsset(Base, UUIDPrimaryKey):
     visual_index_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
     )
+    alignment_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
     kind: Mapped[str] = mapped_column(String(100))
     storage_uri: Mapped[str] = mapped_column(String(1000), unique=True)
     mime_type: Mapped[str] = mapped_column(String(200))
@@ -9407,6 +12214,139 @@ class RetrievalCandidateTemporalSegment(Base):
     hit_rank: Mapped[int] = mapped_column(Integer)
 
 
+class AlignmentRun(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "alignment_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "retrieval_run_id",
+            "configuration_fingerprint",
+            name="uq_alignment_run_retrieval_config",
+        ),
+        Index("ix_alignment_runs_session_created", "session_id", "created_at"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    retrieval_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("retrieval_runs.id", ondelete="CASCADE")
+    )
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    strategy: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    usage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    subjects: Mapped[list["AlignmentSubject"]] = relationship(
+        order_by="AlignmentSubject.subject_key", cascade="all, delete-orphan"
+    )
+
+
+class AlignmentSubject(Base, UUIDPrimaryKey):
+    __tablename__ = "alignment_subjects"
+    __table_args__ = (
+        UniqueConstraint(
+            "alignment_run_id",
+            "subject_key",
+            name="uq_alignment_subject_run_key",
+        ),
+        Index("ix_alignment_subjects_run_status", "alignment_run_id", "status"),
+    )
+    alignment_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
+    subject_key: Mapped[str] = mapped_column(String(100))
+    note_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("notes.id", ondelete="CASCADE"))
+    observation: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    selected_candidate_alignment_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "candidate_alignments.id",
+            name="fk_alignment_subject_selected_candidate",
+            use_alter=True,
+            ondelete="SET NULL",
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    results: Mapped[list["CandidateAlignment"]] = relationship(
+        foreign_keys="CandidateAlignment.alignment_subject_id",
+        order_by="CandidateAlignment.retrieval_rank",
+        cascade="all, delete-orphan",
+    )
+
+
+class CandidateAlignment(Base, UUIDPrimaryKey):
+    __tablename__ = "candidate_alignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "alignment_run_id",
+            "retrieval_candidate_id",
+            name="uq_candidate_alignment_run_candidate",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_candidate_alignment_confidence",
+        ),
+        CheckConstraint(
+            "status != 'matched' OR "
+            "(start_seconds IS NOT NULL AND end_seconds IS NOT NULL "
+            "AND start_seconds >= 0 AND end_seconds > start_seconds "
+            "AND confidence IS NOT NULL)",
+            name="ck_candidate_alignment_matched_range",
+        ),
+        CheckConstraint(
+            "status != 'unmatched' OR "
+            "(start_seconds IS NULL AND end_seconds IS NULL "
+            "AND confidence IS NOT NULL)",
+            name="ck_candidate_alignment_unmatched_range",
+        ),
+        CheckConstraint(
+            "timestamp_resolution_seconds IS NULL " "OR timestamp_resolution_seconds > 0",
+            name="ck_candidate_alignment_resolution_positive",
+        ),
+        Index(
+            "ix_candidate_alignments_subject_rank",
+            "alignment_subject_id",
+            "retrieval_rank",
+        ),
+        Index("ix_candidate_alignments_candidate", "retrieval_candidate_id"),
+    )
+    alignment_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
+    alignment_subject_id: Mapped[UUID] = mapped_column(
+        ForeignKey("alignment_subjects.id", ondelete="CASCADE")
+    )
+    retrieval_candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("retrieval_candidates.id", ondelete="CASCADE")
+    )
+    note_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("notes.id", ondelete="CASCADE"))
+    retrieval_rank: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    start_seconds: Mapped[float | None] = mapped_column(Float)
+    end_seconds: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    anchors: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    reasoning_summary: Mapped[str | None] = mapped_column(Text)
+    timestamp_resolution_seconds: Mapped[float | None] = mapped_column(Float)
+    pass_count: Mapped[int] = mapped_column(Integer, default=0)
+    provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    usage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    latency_seconds: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
     __table_args__ = (Index("ix_processing_jobs_status_created", "status", "created_at"),)
@@ -9421,6 +12361,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     )
     temporal_index_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("temporal_indexes.id", ondelete="CASCADE")
+    )
+    alignment_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("alignment_runs.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")
@@ -9549,6 +12492,15 @@ class JobRepository:
         )
         return result.scalar_one_or_none()
 
+    async def for_alignment_run(self, alignment_run_id: UUID) -> ProcessingJob | None:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(ProcessingJob.alignment_run_id == alignment_run_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def recoverable(self, stale_before: datetime) -> Sequence[ProcessingJob]:
         result = await self.db.execute(
             select(ProcessingJob)
@@ -9636,6 +12588,7 @@ class SessionOut(SessionSummary):
 class JobOut(ORMModel):
     id: UUID
     temporal_index_id: UUID | None
+    alignment_run_id: UUID | None
     project_id: UUID
     session_id: UUID
     media_id: UUID
@@ -9670,6 +12623,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.services.alignment import AlignmentProcessor
+from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
 from app.services.embedding_provider import LiteLLMEmbeddingProvider
 from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import FFprobe
@@ -9696,6 +12651,11 @@ def build_default_registry() -> ProcessorRegistry:
         settings.litellm_base_url,
         settings.litellm_api_key,
         settings.embedding_timeout_seconds,
+    )
+    alignment_provider = LiteLLMMultimodalAlignmentProvider(
+        settings.litellm_base_url,
+        settings.litellm_api_key,
+        settings.alignment_timeout_seconds,
     )
     registry = ProcessorRegistry()
     registry.register(
@@ -9727,6 +12687,15 @@ def build_default_registry() -> ProcessorRegistry:
             db,
             embedding_provider,
             settings.embedding_batch_size,
+        ),
+    )
+    registry.register(
+        "multimodal_alignment",
+        lambda db: AlignmentProcessor(
+            db,
+            storage,
+            frame_extractor,
+            alignment_provider,
         ),
     )
     return registry
@@ -9800,6 +12769,7 @@ from sqlalchemy import text
 
 from app.api.dependencies import DB
 from app.api.routers import (
+    alignments,
     candidate_retrieval,
     jobs,
     projects,
@@ -9839,6 +12809,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(visual_indexes.router)
     application.include_router(temporal_indexes.router)
     application.include_router(candidate_retrieval.router)
+    application.include_router(alignments.router)
     application.include_router(jobs.router)
 
     @application.get("/health", tags=["health"])
@@ -10016,6 +12987,64 @@ Migration 0005 adds the retrieval aggregate and provenance edge. Candidate
 retrieval requires a completed TemporalIndex and uses that index's configured
 EmbeddingProvider/model/dimensions. It does not call a chat or multimodal model,
 does not confirm alignment and cannot demote MediaSession.
+
+
+## Provider-neutral multimodal temporal alignment
+
+POST /retrieval-runs/{id}/alignments creates or reuses an AlignmentRun and
+queues a multimodal_alignment job. The retrieval run must be completed and the
+optional candidate subset is ownership-validated. ProcessingJob keeps the
+explicit alignment_run_id target; the small concrete target set still does not
+justify a generic job-target refactor.
+
+AlignmentRun records RetrievalRun provenance, provider/model, strategy and
+prompt versions, canonical configuration, lifecycle, provider metadata and
+aggregated usage. AlignmentSubject is the exact immutable Note.raw or arbitrary
+query evaluation unit. CandidateAlignment records one candidate hypothesis,
+retrieval rank, state, optional interval/confidence, bounded anchors, concise
+evidence summary, provider metadata, usage, latency, pass count and measured
+sampling resolution. The subject selects the best matched result
+deterministically by confidence, then retrieval rank and retrieval score.
+
+MultimodalAlignmentProvider is deliberately separate from embeddings and generic
+chat. LiteLLMMultimodalAlignmentProvider targets the existing OpenAI-compatible
+/v1/chat/completions gateway and knows no underlying Gemini/cloud/local
+implementation. It sends temperature zero plus a strict JSON Schema. The shared
+prompt explicitly treats each candidate as a hypothesis, permits unmatched, and
+forbids fabricated timestamps or hidden chain-of-thought. Returned timestamps
+and anchors are rejected if they escape the candidate window.
+
+The worker resolves the source storage_uri locally, samples compact JPEGs only
+inside each candidate and labels every frame with an absolute timestamp. It
+uniformly widens the spacing when the configured maximum frame count would be
+exceeded. Existing representative frames may supplement dense samples without
+near-duplicate timestamps. Optional refinement resamples only a padded coarse
+match at a finer configured interval; the refinement response is authoritative.
+A high-confidence match can stop later ranks, which remain not_evaluated.
+
+Dense evidence JPEGs are managed DerivedAssets under:
+
+    projects/{project_id}/sessions/{session_id}/derived/alignment/
+      {alignment_run_id}/frames/{deterministic_filename}
+
+Their checksums, dimensions, source window, candidate ID, pass and sampling
+resolution are persisted. Binary bytes and base64 are never stored in database
+JSON or returned by APIs; data URLs exist only in the outbound LiteLLM request.
+
+matched and unmatched are both valid provider outcomes. unmatched requires null
+timestamps. no_candidates is a valid subject outcome. Provider, timeout,
+transport, structured-output and bounds errors produce failed, never unmatched.
+AlignmentRun may complete with unmatched/no_candidates subjects and cannot
+change a ready MediaSession.
+
+The provider has no internal retry. ProcessingJob bounded attempts are the only
+retry layer, preventing multiplicative retry storms. A retry deletes the run's
+subjects, candidate results, DerivedAsset rows and alignment storage namespace,
+then rebuilds them. This compensating database/filesystem cleanup retains the
+same single-worker and non-transactional filesystem limitations as visual
+indexing. Fingerprint identity includes retrieval run, ordered candidate subset,
+subjects, provider/model, strategy/prompt, result schema and all material frame,
+refinement and early-stop settings.
 </file>
 
 <file path="docs/DOMAIN_MODEL.md">
@@ -10130,6 +13159,50 @@ through temporal overlap. Only contributing vector hits are normalized as
 candidate provenance. The evidence service exposes both sets and preserves
 Note.raw unchanged; frames are references by storage_uri, never database blobs
 or base64.
+
+
+## Multimodal alignment
+
+- AlignmentRun is one versioned multimodal evaluation over a completed
+  RetrievalRun. It owns provider/model, strategy, prompt, configuration identity,
+  lifecycle, provider metadata and aggregated usage.
+- AlignmentSubject is one exact Note.raw or arbitrary-query observation within a
+  run. Its state is matched, unmatched, no_candidates or failed and it optionally
+  points to the selected CandidateAlignment.
+- CandidateAlignment evaluates one RetrievalCandidate for one subject. It
+  preserves retrieval rank, matched/unmatched/failed/not_evaluated state,
+  optional bounded interval, confidence, anchors, evidence summary, sampling
+  resolution, pass count, provider metadata, usage, latency and error.
+- DerivedAsset may point to AlignmentRun and represents a managed alignment_frame
+  JPEG with candidate/pass/source-window metadata.
+- ProcessingJob may point explicitly to AlignmentRun and executes the independent
+  multimodal_alignment stage.
+
+The unique (retrieval_run_id, configuration_fingerprint) constraint is the
+alignment idempotency boundary. The fingerprint includes the exact ordered
+candidate set and subjects plus provider/model, strategy/prompt/result-schema,
+frame sampling/encoding, transcript bound, refinement and early-stop settings.
+A changed model or material configuration coexists instead of overwriting
+previous evidence.
+
+Alignment is hypothesis validation, not retrieval. A matched result requires
+candidate-bounded start_seconds < end_seconds and a confidence in [0,1].
+unmatched is a successful result with null timestamps and confidence; provider
+failure is a distinct failed state. not_evaluated records early stop explicitly.
+A run can therefore complete without any match. No MediaSession status transition
+depends on AlignmentRun outcome.
+
+Anchors are a small structured JSON payload because they are bounded explanatory
+observations, not relational identity. The durable source hypothesis remains the
+RetrievalCandidate FK, and exact Note provenance remains the AlignmentSubject
+note_id plus preserved observation. Provider reasoning is limited to a concise
+evidence summary; hidden chain-of-thought is neither requested nor stored.
+
+Dense alignment frames remain external files. DerivedAsset retains their logical
+URI, checksum, size, dimensions, timestamp and source window. Base64 is transport
+only. Retry replaces subjects, candidate results and managed frame assets for
+the same AlignmentRun while preserving RetrievalRun, RetrievalCandidates and
+Note.raw.
 </file>
 
 <file path="docs/ROADMAP.md">
@@ -10177,16 +13250,29 @@ Candidate Retrieval for notes and footage is implemented:
 - synchronous arbitrary-query, single-note and batch-note APIs;
 - strategy/configuration fingerprints and idempotent run reuse.
 
+Provider-neutral multimodal temporal alignment is implemented:
+
+- persisted AlignmentRun, AlignmentSubject and CandidateAlignment aggregates;
+- explicit RetrievalRun/candidate/Note provenance and versioned strategy/prompt;
+- candidate-only bounded dense JPEG sampling with managed DerivedAssets;
+- OpenAI-compatible LiteLLM multimodal provider with strict structured output;
+- explicit matched, unmatched, failed, not_evaluated and no_candidates semantics;
+- optional coarse-to-fine refinement and confidence-based early stop;
+- independent multimodal_alignment jobs with heartbeat, bounded attempts and
+  deterministic retry cleanup;
+- asynchronous creation plus run, paginated-result and candidate-detail APIs;
+- deterministic fake-provider coverage and opt-in real gameplay scripts.
+
 ## Planned
 
-1. Provider-neutral multimodal temporal alignment where unmatched is valid.
-2. Consolidated Semantic Timeline export and project/session Media Search.
+1. Consolidated Semantic Timeline export and project/session Media Search.
 
 Editorial work stays in Ideas Hub; voice, planning, composition and rendering
 stay in production services.
 
-There is still no confirmed note alignment, OCR, image captioning, Gemini
-alignment, multimodal understanding, consolidated Semantic Timeline or final
+There is still no OCR, image captioning, generic multimodal search, consolidated
+Semantic Timeline, project/session Media Search, Ideas Hub/Orchestrator
+integration or composition/rendering pipeline in this service.
 </file>
 
 <file path=".env.example">
@@ -10237,6 +13323,19 @@ CANDIDATE_MAX_SEGMENT_GAP_SECONDS=5
 CANDIDATE_CONTEXT_BEFORE_SECONDS=15
 CANDIDATE_CONTEXT_AFTER_SECONDS=20
 CANDIDATE_MAX_DURATION_SECONDS=120
+ALIGNMENT_MODEL=alignment-flash
+ALIGNMENT_TIMEOUT_SECONDS=120
+ALIGNMENT_FRAME_INTERVAL_SECONDS=2
+ALIGNMENT_MAX_FRAMES=60
+ALIGNMENT_FRAME_WIDTH=640
+ALIGNMENT_JPEG_QUALITY=82
+ALIGNMENT_FRAME_DEDUP_TOLERANCE_SECONDS=0.25
+ALIGNMENT_MAX_TRANSCRIPT_CHARACTERS=12000
+ALIGNMENT_REFINEMENT_ENABLED=false
+ALIGNMENT_REFINEMENT_FRAME_INTERVAL_SECONDS=0.5
+ALIGNMENT_REFINEMENT_PADDING_SECONDS=4
+ALIGNMENT_REFINEMENT_MAX_FRAMES=40
+ALIGNMENT_EARLY_STOP_CONFIDENCE=0.90
 </file>
 
 <file path="AGENTS.md">
@@ -10279,8 +13378,21 @@ traceable RetrievalCandidate scoring and normalized contributing-hit links.
 Note.raw remains immutable; chronological order is only a weak prior. Tests use
 fake embeddings and retrieval never claims a confirmed match.
 
-The next roadmap phase is provider-neutral multimodal temporal alignment where
-unmatched is valid. Gemini/multimodal calls, confirmed alignment and editorial
+Provider-neutral multimodal temporal alignment is now implemented as an
+independent durable stage. Keep AlignmentRun/AlignmentSubject/CandidateAlignment
+provenance, explicit matched/unmatched/failed/not_evaluated semantics, bounded
+candidate-only frame sampling and versioned prompts. Unmatched/no_candidates are
+valid completed outcomes. Tests use fake providers and frame extractors; real
+LiteLLM/FFmpeg evaluation is an explicit smoke requiring credentials.
+
+LiteLLM is only a provider-neutral OpenAI-compatible gateway here. Never hardwire
+Gemini or another underlying model, persist base64, expose host paths, request
+hidden chain-of-thought, or convert provider failures into unmatched. Provider
+adapters do not retry; bounded ProcessingJob attempts are the single retry layer.
+
+The next roadmap phase is consolidated Semantic Timeline export and
+project/session Media Search. Do not add editorial ranking, script generation,
+Ideas Hub/Orchestrator integration, composition or rendering in advance.
 </file>
 
 <file path="docker-compose.yml">
@@ -10350,6 +13462,19 @@ services:
       CANDIDATE_CONTEXT_BEFORE_SECONDS: ${CANDIDATE_CONTEXT_BEFORE_SECONDS:-15}
       CANDIDATE_CONTEXT_AFTER_SECONDS: ${CANDIDATE_CONTEXT_AFTER_SECONDS:-20}
       CANDIDATE_MAX_DURATION_SECONDS: ${CANDIDATE_MAX_DURATION_SECONDS:-120}
+      ALIGNMENT_MODEL: ${ALIGNMENT_MODEL:-alignment-flash}
+      ALIGNMENT_TIMEOUT_SECONDS: ${ALIGNMENT_TIMEOUT_SECONDS:-120}
+      ALIGNMENT_FRAME_INTERVAL_SECONDS: ${ALIGNMENT_FRAME_INTERVAL_SECONDS:-2}
+      ALIGNMENT_MAX_FRAMES: ${ALIGNMENT_MAX_FRAMES:-60}
+      ALIGNMENT_FRAME_WIDTH: ${ALIGNMENT_FRAME_WIDTH:-640}
+      ALIGNMENT_JPEG_QUALITY: ${ALIGNMENT_JPEG_QUALITY:-82}
+      ALIGNMENT_FRAME_DEDUP_TOLERANCE_SECONDS: ${ALIGNMENT_FRAME_DEDUP_TOLERANCE_SECONDS:-0.25}
+      ALIGNMENT_MAX_TRANSCRIPT_CHARACTERS: ${ALIGNMENT_MAX_TRANSCRIPT_CHARACTERS:-12000}
+      ALIGNMENT_REFINEMENT_ENABLED: ${ALIGNMENT_REFINEMENT_ENABLED:-false}
+      ALIGNMENT_REFINEMENT_FRAME_INTERVAL_SECONDS: ${ALIGNMENT_REFINEMENT_FRAME_INTERVAL_SECONDS:-0.5}
+      ALIGNMENT_REFINEMENT_PADDING_SECONDS: ${ALIGNMENT_REFINEMENT_PADDING_SECONDS:-4}
+      ALIGNMENT_REFINEMENT_MAX_FRAMES: ${ALIGNMENT_REFINEMENT_MAX_FRAMES:-40}
+      ALIGNMENT_EARLY_STOP_CONFIDENCE: ${ALIGNMENT_EARLY_STOP_CONFIDENCE:-0.90}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports: ["${API_PORT:-8012}:8000"]
     volumes:
@@ -10566,6 +13691,71 @@ Operational defaults:
     CANDIDATE_MAX_DURATION_SECONDS=120
 
 
+## Multimodal temporal alignment
+
+Alignment consumes a completed RetrievalRun and evaluates its candidate windows;
+it never sends the full source media to the model:
+
+    POST /retrieval-runs/{retrieval_run_id}/alignments
+
+The HTTP 202 response contains an AlignmentRun and its independent
+multimodal_alignment ProcessingJob. A request may include candidate_ids to
+evaluate an explicit subset. Query persisted outcomes without image bytes:
+
+    GET /alignment-runs/{alignment_run_id}
+    GET /alignment-runs/{alignment_run_id}/results?offset=0&limit=100
+    GET /candidate-alignments/{candidate_alignment_id}
+    GET /jobs/{job_id}
+
+AlignmentRun owns provider/model, semantic_temporal_v1 input provenance,
+multimodal_alignment_v1 strategy, alignment_prompt_v1, canonical configuration
+and lifecycle. AlignmentSubject preserves each exact Note.raw or arbitrary query.
+CandidateAlignment retains retrieval rank, matched/unmatched/failed/not_evaluated
+state, optional interval, confidence, bounded anchors, concise evidence summary,
+provider metadata, usage and measured timestamp resolution.
+
+The provider port is multimodal-alignment-specific. Its LiteLLM adapter uses the
+OpenAI-compatible /v1/chat/completions endpoint with JSON Schema output, text
+evidence and timestamp-labelled JPEGs. Source storage URIs are resolved before
+the call; base64 data URLs exist only inside the HTTP request and are never
+persisted or exposed by the API.
+
+Each candidate is sampled uniformly at about two seconds, dynamically widened
+when needed to respect ALIGNMENT_MAX_FRAMES. Sampling is scoped to the candidate,
+uses compact aspect-preserving JPEGs, and may combine existing representative
+frames. Optional refinement resamples only a padded coarse match at finer
+resolution. When refinement is enabled its valid output is authoritative.
+High-confidence matches can stop later ranks; skipped candidates are explicitly
+not_evaluated.
+
+Unmatched is a successful domain result with null timestamps. no_candidates is
+also successful at subject level. Provider/network/schema errors are failed and
+never converted into unmatched. The run can complete with any mix of matched,
+unmatched, not_evaluated and no_candidates subjects, and cannot demote a ready
+MediaSession.
+
+Equivalent retrieval input, candidate subset, provider/model, prompt/strategy
+and frame/refinement configuration reuse one AlignmentRun and job. Retry deletes
+that run's CandidateAlignments, AlignmentSubjects and managed alignment-frame
+namespace, then deterministically rebuilds it. Provider adapters do not retry;
+bounded ProcessingJob attempts are the single retry layer.
+
+Operational defaults:
+
+    ALIGNMENT_MODEL=alignment-flash
+    ALIGNMENT_TIMEOUT_SECONDS=120
+    ALIGNMENT_FRAME_INTERVAL_SECONDS=2
+    ALIGNMENT_MAX_FRAMES=60
+    ALIGNMENT_FRAME_WIDTH=640
+    ALIGNMENT_JPEG_QUALITY=82
+    ALIGNMENT_MAX_TRANSCRIPT_CHARACTERS=12000
+    ALIGNMENT_REFINEMENT_ENABLED=false
+    ALIGNMENT_REFINEMENT_FRAME_INTERVAL_SECONDS=0.5
+    ALIGNMENT_REFINEMENT_PADDING_SECONDS=4
+    ALIGNMENT_REFINEMENT_MAX_FRAMES=40
+    ALIGNMENT_EARLY_STOP_CONFIDENCE=0.90
+
+
 ## Long-running jobs
 
 Processing jobs record heartbeat_at, attempt_count and max_attempts. On startup,
@@ -10636,6 +13826,24 @@ The command prints ranked HH:MM:SS windows and scores. Real embedding commands
 keep normal LiteLLM authentication; the current environment's prior 401 means a
 valid LITELLM_API_KEY is required for real evaluation. Tests and the
 deterministic smoke use a fake EmbeddingProvider and require no credentials.
+
+
+## Multimodal alignment smokes
+
+After a real RetrievalRun exists, evaluate one or more candidates:
+
+    python scripts/smoke_multimodal_alignment.py \
+      --retrieval-run-id UUID --candidate-id UUID
+
+For a readable full note-run evaluation:
+
+    python scripts/evaluate_note_alignment.py --retrieval-run-id UUID
+
+Both commands use persisted source media, real FFmpeg frame extraction and the
+configured LiteLLM chat model alias. They require a valid LITELLM_API_KEY; the
+known credential-less environment returns HTTP 401 and is not bypassed.
+Normal pytest uses FakeAlignmentProvider/FakeFrameExtractor and performs no
+network, CUDA, model download or real-video processing.
 </file>
 
 </files>

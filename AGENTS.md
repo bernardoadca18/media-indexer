@@ -49,6 +49,13 @@ Gemini or another underlying model, persist base64, expose host paths, request
 hidden chain-of-thought, or convert provider failures into unmatched. Provider
 adapters do not retry; bounded ProcessingJob attempts are the single retry layer.
 
-The next roadmap phase is consolidated Semantic Timeline export and
-project/session Media Search. Do not add editorial ranking, script generation,
-Ideas Hub/Orchestrator integration, composition or rendering in advance.
+Consolidated Semantic Timeline is now an implemented read-only projection over
+an explicit completed TemporalIndex and an optional compatible completed
+AlignmentRun. Keep timeline assembly synchronous and side-effect free: never
+invoke providers, embeddings, FFmpeg or jobs, never expose vectors/image bytes,
+and preserve Note.raw exactly. Use compact normalized evidence references and
+the documented [start,end) overlap semantics.
+
+The next roadmap phase is Project/Session Media Search. Do not add editorial
+ranking, script generation, Ideas Hub/Orchestrator integration, composition or
+rendering in advance.

@@ -219,3 +219,34 @@ same single-worker and non-transactional filesystem limitations as visual
 indexing. Fingerprint identity includes retrieval run, ordered candidate subset,
 subjects, provider/model, strategy/prompt, result schema and all material frame,
 refinement and early-stop settings.
+
+
+## Consolidated Semantic Timeline projection
+
+GET /sessions/{session_id}/semantic-timeline assembles the persisted semantic
+timeline without introducing another durable aggregate. TemporalIndex,
+TemporalSegment, normalized evidence links, Note and optional AlignmentRun
+already hold the required identities and lifecycle. Re-persisting their join
+would create cache invalidation and stale-copy semantics without adding domain
+truth, so this stage is a read-only application projection and has no migration.
+
+The caller must select a completed TemporalIndex explicitly. An optional
+AlignmentRun must be completed, belong to the same session/media, and originate
+from a RetrievalRun for that exact TemporalIndex. This prevents combining
+alignment results with a semantically incompatible timeline version.
+
+Timeline items retain TemporalSegment sequence and [start,end) interval, ASR-only
+text, silent state and compact IDs/ranges for transcript and scene evidence.
+Frames expose logical storage_uri plus bounded image metadata; no binary/base64
+or embedding vector is loaded into the response. Notes are ordered by Note.order
+and preserve raw exactly. The optional alignment projection exposes subject
+status and only the selected matched result's interval, confidence, anchors and
+overlapping TemporalSegment IDs.
+
+Temporal range selection uses overlap predicates (end > requested_start and
+start < requested_end), then offset/limit pagination. Evidence for the page is
+loaded in three batched relationship queries. Notes, alignment subjects and
+selected-result overlaps are likewise batch-loaded, yielding a bounded query
+count independent of page size and avoiding ORM lazy-load N+1 behavior.
+Timeline assembly invokes no worker, LLM, embedding provider, FFmpeg or storage
+mutation.
