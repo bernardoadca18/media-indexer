@@ -37,5 +37,18 @@ traceable RetrievalCandidate scoring and normalized contributing-hit links.
 Note.raw remains immutable; chronological order is only a weak prior. Tests use
 fake embeddings and retrieval never claims a confirmed match.
 
-The next roadmap phase is provider-neutral multimodal temporal alignment where
-unmatched is valid. Gemini/multimodal calls, confirmed alignment and editorial
+Provider-neutral multimodal temporal alignment is now implemented as an
+independent durable stage. Keep AlignmentRun/AlignmentSubject/CandidateAlignment
+provenance, explicit matched/unmatched/failed/not_evaluated semantics, bounded
+candidate-only frame sampling and versioned prompts. Unmatched/no_candidates are
+valid completed outcomes. Tests use fake providers and frame extractors; real
+LiteLLM/FFmpeg evaluation is an explicit smoke requiring credentials.
+
+LiteLLM is only a provider-neutral OpenAI-compatible gateway here. Never hardwire
+Gemini or another underlying model, persist base64, expose host paths, request
+hidden chain-of-thought, or convert provider failures into unmatched. Provider
+adapters do not retry; bounded ProcessingJob attempts are the single retry layer.
+
+The next roadmap phase is consolidated Semantic Timeline export and
+project/session Media Search. Do not add editorial ranking, script generation,
+Ideas Hub/Orchestrator integration, composition or rendering in advance.

@@ -109,3 +109,47 @@ through temporal overlap. Only contributing vector hits are normalized as
 candidate provenance. The evidence service exposes both sets and preserves
 Note.raw unchanged; frames are references by storage_uri, never database blobs
 or base64.
+
+
+## Multimodal alignment
+
+- AlignmentRun is one versioned multimodal evaluation over a completed
+  RetrievalRun. It owns provider/model, strategy, prompt, configuration identity,
+  lifecycle, provider metadata and aggregated usage.
+- AlignmentSubject is one exact Note.raw or arbitrary-query observation within a
+  run. Its state is matched, unmatched, no_candidates or failed and it optionally
+  points to the selected CandidateAlignment.
+- CandidateAlignment evaluates one RetrievalCandidate for one subject. It
+  preserves retrieval rank, matched/unmatched/failed/not_evaluated state,
+  optional bounded interval, confidence, anchors, evidence summary, sampling
+  resolution, pass count, provider metadata, usage, latency and error.
+- DerivedAsset may point to AlignmentRun and represents a managed alignment_frame
+  JPEG with candidate/pass/source-window metadata.
+- ProcessingJob may point explicitly to AlignmentRun and executes the independent
+  multimodal_alignment stage.
+
+The unique (retrieval_run_id, configuration_fingerprint) constraint is the
+alignment idempotency boundary. The fingerprint includes the exact ordered
+candidate set and subjects plus provider/model, strategy/prompt/result-schema,
+frame sampling/encoding, transcript bound, refinement and early-stop settings.
+A changed model or material configuration coexists instead of overwriting
+previous evidence.
+
+Alignment is hypothesis validation, not retrieval. A matched result requires
+candidate-bounded start_seconds < end_seconds and a confidence in [0,1].
+unmatched is a successful result with null timestamps and confidence; provider
+failure is a distinct failed state. not_evaluated records early stop explicitly.
+A run can therefore complete without any match. No MediaSession status transition
+depends on AlignmentRun outcome.
+
+Anchors are a small structured JSON payload because they are bounded explanatory
+observations, not relational identity. The durable source hypothesis remains the
+RetrievalCandidate FK, and exact Note provenance remains the AlignmentSubject
+note_id plus preserved observation. Provider reasoning is limited to a concise
+evidence summary; hidden chain-of-thought is neither requested nor stored.
+
+Dense alignment frames remain external files. DerivedAsset retains their logical
+URI, checksum, size, dimensions, timestamp and source window. Base64 is transport
+only. Retry replaces subjects, candidate results and managed frame assets for
+the same AlignmentRun while preserving RetrievalRun, RetrievalCandidates and
+Note.raw.

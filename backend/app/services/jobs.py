@@ -4,9 +4,19 @@ from typing import Protocol
 from uuid import UUID
 
 import structlog
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaSession, ProcessingJob, TemporalIndex, Transcription, VisualIndex
+from app.models import (
+    AlignmentRun,
+    AlignmentSubject,
+    CandidateAlignment,
+    MediaSession,
+    ProcessingJob,
+    TemporalIndex,
+    Transcription,
+    VisualIndex,
+)
 from app.repositories.domain import JobRepository
 
 logger = structlog.get_logger(__name__)
@@ -125,6 +135,11 @@ class JobExecutor:
                     if temporal_index is not None:
                         temporal_index.status = "pending"
                         temporal_index.completed_at = None
+                elif job.alignment_run_id is not None:
+                    alignment_run = await self.db.get(AlignmentRun, job.alignment_run_id)
+                    if alignment_run is not None:
+                        alignment_run.status = "pending"
+                        alignment_run.completed_at = None
             recovered.append(job.id)
         await self.db.commit()
         return recovered
@@ -150,6 +165,28 @@ class JobExecutor:
             if temporal_index is not None:
                 temporal_index.status = "failed"
                 temporal_index.completed_at = datetime.now(UTC)
+        elif job.alignment_run_id is not None:
+            alignment_run = await self.db.get(AlignmentRun, job.alignment_run_id)
+            if alignment_run is not None:
+                now = datetime.now(UTC)
+                alignment_run.status = "failed"
+                alignment_run.completed_at = now
+                await self.db.execute(
+                    update(CandidateAlignment)
+                    .where(
+                        CandidateAlignment.alignment_run_id == alignment_run.id,
+                        CandidateAlignment.status == "processing",
+                    )
+                    .values(status="failed", error=error, completed_at=now)
+                )
+                await self.db.execute(
+                    update(AlignmentSubject)
+                    .where(
+                        AlignmentSubject.alignment_run_id == alignment_run.id,
+                        AlignmentSubject.status == "pending",
+                    )
+                    .values(status="failed")
+                )
         elif job.job_type == "initial_index":
             session = await self.db.get(MediaSession, job.session_id)
             if session is not None:

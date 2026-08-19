@@ -196,6 +196,9 @@ class DerivedAsset(Base, UUIDPrimaryKey):
     visual_index_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("visual_indexes.id", ondelete="CASCADE")
     )
+    alignment_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
     kind: Mapped[str] = mapped_column(String(100))
     storage_uri: Mapped[str] = mapped_column(String(1000), unique=True)
     mime_type: Mapped[str] = mapped_column(String(200))
@@ -394,6 +397,139 @@ class RetrievalCandidateTemporalSegment(Base):
     hit_rank: Mapped[int] = mapped_column(Integer)
 
 
+class AlignmentRun(Base, UUIDPrimaryKey, TimestampMixin):
+    __tablename__ = "alignment_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "retrieval_run_id",
+            "configuration_fingerprint",
+            name="uq_alignment_run_retrieval_config",
+        ),
+        Index("ix_alignment_runs_session_created", "session_id", "created_at"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    retrieval_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("retrieval_runs.id", ondelete="CASCADE")
+    )
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    strategy: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    usage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    subjects: Mapped[list["AlignmentSubject"]] = relationship(
+        order_by="AlignmentSubject.subject_key", cascade="all, delete-orphan"
+    )
+
+
+class AlignmentSubject(Base, UUIDPrimaryKey):
+    __tablename__ = "alignment_subjects"
+    __table_args__ = (
+        UniqueConstraint(
+            "alignment_run_id",
+            "subject_key",
+            name="uq_alignment_subject_run_key",
+        ),
+        Index("ix_alignment_subjects_run_status", "alignment_run_id", "status"),
+    )
+    alignment_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
+    subject_key: Mapped[str] = mapped_column(String(100))
+    note_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("notes.id", ondelete="CASCADE"))
+    observation: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    selected_candidate_alignment_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "candidate_alignments.id",
+            name="fk_alignment_subject_selected_candidate",
+            use_alter=True,
+            ondelete="SET NULL",
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    results: Mapped[list["CandidateAlignment"]] = relationship(
+        foreign_keys="CandidateAlignment.alignment_subject_id",
+        order_by="CandidateAlignment.retrieval_rank",
+        cascade="all, delete-orphan",
+    )
+
+
+class CandidateAlignment(Base, UUIDPrimaryKey):
+    __tablename__ = "candidate_alignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "alignment_run_id",
+            "retrieval_candidate_id",
+            name="uq_candidate_alignment_run_candidate",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_candidate_alignment_confidence",
+        ),
+        CheckConstraint(
+            "status != 'matched' OR "
+            "(start_seconds IS NOT NULL AND end_seconds IS NOT NULL "
+            "AND start_seconds >= 0 AND end_seconds > start_seconds "
+            "AND confidence IS NOT NULL)",
+            name="ck_candidate_alignment_matched_range",
+        ),
+        CheckConstraint(
+            "status != 'unmatched' OR "
+            "(start_seconds IS NULL AND end_seconds IS NULL "
+            "AND confidence IS NOT NULL)",
+            name="ck_candidate_alignment_unmatched_range",
+        ),
+        CheckConstraint(
+            "timestamp_resolution_seconds IS NULL " "OR timestamp_resolution_seconds > 0",
+            name="ck_candidate_alignment_resolution_positive",
+        ),
+        Index(
+            "ix_candidate_alignments_subject_rank",
+            "alignment_subject_id",
+            "retrieval_rank",
+        ),
+        Index("ix_candidate_alignments_candidate", "retrieval_candidate_id"),
+    )
+    alignment_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
+    alignment_subject_id: Mapped[UUID] = mapped_column(
+        ForeignKey("alignment_subjects.id", ondelete="CASCADE")
+    )
+    retrieval_candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("retrieval_candidates.id", ondelete="CASCADE")
+    )
+    note_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("notes.id", ondelete="CASCADE"))
+    retrieval_rank: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    start_seconds: Mapped[float | None] = mapped_column(Float)
+    end_seconds: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    anchors: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    reasoning_summary: Mapped[str | None] = mapped_column(Text)
+    timestamp_resolution_seconds: Mapped[float | None] = mapped_column(Float)
+    pass_count: Mapped[int] = mapped_column(Integer, default=0)
+    provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    usage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    latency_seconds: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
     __table_args__ = (Index("ix_processing_jobs_status_created", "status", "created_at"),)
@@ -408,6 +544,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     )
     temporal_index_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("temporal_indexes.id", ondelete="CASCADE")
+    )
+    alignment_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("alignment_runs.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")

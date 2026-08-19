@@ -161,3 +161,61 @@ Migration 0005 adds the retrieval aggregate and provenance edge. Candidate
 retrieval requires a completed TemporalIndex and uses that index's configured
 EmbeddingProvider/model/dimensions. It does not call a chat or multimodal model,
 does not confirm alignment and cannot demote MediaSession.
+
+
+## Provider-neutral multimodal temporal alignment
+
+POST /retrieval-runs/{id}/alignments creates or reuses an AlignmentRun and
+queues a multimodal_alignment job. The retrieval run must be completed and the
+optional candidate subset is ownership-validated. ProcessingJob keeps the
+explicit alignment_run_id target; the small concrete target set still does not
+justify a generic job-target refactor.
+
+AlignmentRun records RetrievalRun provenance, provider/model, strategy and
+prompt versions, canonical configuration, lifecycle, provider metadata and
+aggregated usage. AlignmentSubject is the exact immutable Note.raw or arbitrary
+query evaluation unit. CandidateAlignment records one candidate hypothesis,
+retrieval rank, state, optional interval/confidence, bounded anchors, concise
+evidence summary, provider metadata, usage, latency, pass count and measured
+sampling resolution. The subject selects the best matched result
+deterministically by confidence, then retrieval rank and retrieval score.
+
+MultimodalAlignmentProvider is deliberately separate from embeddings and generic
+chat. LiteLLMMultimodalAlignmentProvider targets the existing OpenAI-compatible
+/v1/chat/completions gateway and knows no underlying Gemini/cloud/local
+implementation. It sends temperature zero plus a strict JSON Schema. The shared
+prompt explicitly treats each candidate as a hypothesis, permits unmatched, and
+forbids fabricated timestamps or hidden chain-of-thought. Returned timestamps
+and anchors are rejected if they escape the candidate window.
+
+The worker resolves the source storage_uri locally, samples compact JPEGs only
+inside each candidate and labels every frame with an absolute timestamp. It
+uniformly widens the spacing when the configured maximum frame count would be
+exceeded. Existing representative frames may supplement dense samples without
+near-duplicate timestamps. Optional refinement resamples only a padded coarse
+match at a finer configured interval; the refinement response is authoritative.
+A high-confidence match can stop later ranks, which remain not_evaluated.
+
+Dense evidence JPEGs are managed DerivedAssets under:
+
+    projects/{project_id}/sessions/{session_id}/derived/alignment/
+      {alignment_run_id}/frames/{deterministic_filename}
+
+Their checksums, dimensions, source window, candidate ID, pass and sampling
+resolution are persisted. Binary bytes and base64 are never stored in database
+JSON or returned by APIs; data URLs exist only in the outbound LiteLLM request.
+
+matched and unmatched are both valid provider outcomes. unmatched requires null
+timestamps. no_candidates is a valid subject outcome. Provider, timeout,
+transport, structured-output and bounds errors produce failed, never unmatched.
+AlignmentRun may complete with unmatched/no_candidates subjects and cannot
+change a ready MediaSession.
+
+The provider has no internal retry. ProcessingJob bounded attempts are the only
+retry layer, preventing multiplicative retry storms. A retry deletes the run's
+subjects, candidate results, DerivedAsset rows and alignment storage namespace,
+then rebuilds them. This compensating database/filesystem cleanup retains the
+same single-worker and non-transactional filesystem limitations as visual
+indexing. Fingerprint identity includes retrieval run, ordered candidate subset,
+subjects, provider/model, strategy/prompt, result schema and all material frame,
+refinement and early-stop settings.

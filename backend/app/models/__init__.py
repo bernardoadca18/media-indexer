@@ -1,6 +1,9 @@
 from app.models.base import Base
 from app.models.entities import (
     EMBEDDING_VECTOR_DIMENSIONS,
+    AlignmentRun,
+    AlignmentSubject,
+    CandidateAlignment,
     DerivedAsset,
     MediaAsset,
     MediaProject,
@@ -24,6 +27,9 @@ from app.models.entities import (
 __all__ = [
     "Base",
     "EMBEDDING_VECTOR_DIMENSIONS",
+    "AlignmentRun",
+    "AlignmentSubject",
+    "CandidateAlignment",
     "DerivedAsset",
     "MediaAsset",
     "MediaProject",

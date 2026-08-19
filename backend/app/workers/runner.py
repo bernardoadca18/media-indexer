@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.services.alignment import AlignmentProcessor
+from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
 from app.services.embedding_provider import LiteLLMEmbeddingProvider
 from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import FFprobe
@@ -33,6 +35,11 @@ def build_default_registry() -> ProcessorRegistry:
         settings.litellm_base_url,
         settings.litellm_api_key,
         settings.embedding_timeout_seconds,
+    )
+    alignment_provider = LiteLLMMultimodalAlignmentProvider(
+        settings.litellm_base_url,
+        settings.litellm_api_key,
+        settings.alignment_timeout_seconds,
     )
     registry = ProcessorRegistry()
     registry.register(
@@ -64,6 +71,15 @@ def build_default_registry() -> ProcessorRegistry:
             db,
             embedding_provider,
             settings.embedding_batch_size,
+        ),
+    )
+    registry.register(
+        "multimodal_alignment",
+        lambda db: AlignmentProcessor(
+            db,
+            storage,
+            frame_extractor,
+            alignment_provider,
         ),
     )
     return registry

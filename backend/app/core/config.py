@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     candidate_context_after_seconds: float = 20.0
     candidate_max_duration_seconds: float = 120.0
 
+    alignment_model: str = "alignment-flash"
+    alignment_timeout_seconds: float = 120.0
+    alignment_frame_interval_seconds: float = 2.0
+    alignment_max_frames: int = 60
+    alignment_frame_width: int = 640
+    alignment_jpeg_quality: int = 82
+    alignment_frame_dedup_tolerance_seconds: float = 0.25
+    alignment_max_transcript_characters: int = 12000
+    alignment_refinement_enabled: bool = False
+    alignment_refinement_frame_interval_seconds: float = 0.5
+    alignment_refinement_padding_seconds: float = 4.0
+    alignment_refinement_max_frames: int = 40
+    alignment_early_stop_confidence: float = 0.90
+
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
     whisper_word_timestamps: bool = True

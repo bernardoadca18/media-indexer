@@ -200,6 +200,71 @@ Operational defaults:
     CANDIDATE_MAX_DURATION_SECONDS=120
 
 
+## Multimodal temporal alignment
+
+Alignment consumes a completed RetrievalRun and evaluates its candidate windows;
+it never sends the full source media to the model:
+
+    POST /retrieval-runs/{retrieval_run_id}/alignments
+
+The HTTP 202 response contains an AlignmentRun and its independent
+multimodal_alignment ProcessingJob. A request may include candidate_ids to
+evaluate an explicit subset. Query persisted outcomes without image bytes:
+
+    GET /alignment-runs/{alignment_run_id}
+    GET /alignment-runs/{alignment_run_id}/results?offset=0&limit=100
+    GET /candidate-alignments/{candidate_alignment_id}
+    GET /jobs/{job_id}
+
+AlignmentRun owns provider/model, semantic_temporal_v1 input provenance,
+multimodal_alignment_v1 strategy, alignment_prompt_v1, canonical configuration
+and lifecycle. AlignmentSubject preserves each exact Note.raw or arbitrary query.
+CandidateAlignment retains retrieval rank, matched/unmatched/failed/not_evaluated
+state, optional interval, confidence, bounded anchors, concise evidence summary,
+provider metadata, usage and measured timestamp resolution.
+
+The provider port is multimodal-alignment-specific. Its LiteLLM adapter uses the
+OpenAI-compatible /v1/chat/completions endpoint with JSON Schema output, text
+evidence and timestamp-labelled JPEGs. Source storage URIs are resolved before
+the call; base64 data URLs exist only inside the HTTP request and are never
+persisted or exposed by the API.
+
+Each candidate is sampled uniformly at about two seconds, dynamically widened
+when needed to respect ALIGNMENT_MAX_FRAMES. Sampling is scoped to the candidate,
+uses compact aspect-preserving JPEGs, and may combine existing representative
+frames. Optional refinement resamples only a padded coarse match at finer
+resolution. When refinement is enabled its valid output is authoritative.
+High-confidence matches can stop later ranks; skipped candidates are explicitly
+not_evaluated.
+
+Unmatched is a successful domain result with null timestamps. no_candidates is
+also successful at subject level. Provider/network/schema errors are failed and
+never converted into unmatched. The run can complete with any mix of matched,
+unmatched, not_evaluated and no_candidates subjects, and cannot demote a ready
+MediaSession.
+
+Equivalent retrieval input, candidate subset, provider/model, prompt/strategy
+and frame/refinement configuration reuse one AlignmentRun and job. Retry deletes
+that run's CandidateAlignments, AlignmentSubjects and managed alignment-frame
+namespace, then deterministically rebuilds it. Provider adapters do not retry;
+bounded ProcessingJob attempts are the single retry layer.
+
+Operational defaults:
+
+    ALIGNMENT_MODEL=alignment-flash
+    ALIGNMENT_TIMEOUT_SECONDS=120
+    ALIGNMENT_FRAME_INTERVAL_SECONDS=2
+    ALIGNMENT_MAX_FRAMES=60
+    ALIGNMENT_FRAME_WIDTH=640
+    ALIGNMENT_JPEG_QUALITY=82
+    ALIGNMENT_MAX_TRANSCRIPT_CHARACTERS=12000
+    ALIGNMENT_REFINEMENT_ENABLED=false
+    ALIGNMENT_REFINEMENT_FRAME_INTERVAL_SECONDS=0.5
+    ALIGNMENT_REFINEMENT_PADDING_SECONDS=4
+    ALIGNMENT_REFINEMENT_MAX_FRAMES=40
+    ALIGNMENT_EARLY_STOP_CONFIDENCE=0.90
+
+
 ## Long-running jobs
 
 Processing jobs record heartbeat_at, attempt_count and max_attempts. On startup,
@@ -270,3 +335,21 @@ The command prints ranked HH:MM:SS windows and scores. Real embedding commands
 keep normal LiteLLM authentication; the current environment's prior 401 means a
 valid LITELLM_API_KEY is required for real evaluation. Tests and the
 deterministic smoke use a fake EmbeddingProvider and require no credentials.
+
+
+## Multimodal alignment smokes
+
+After a real RetrievalRun exists, evaluate one or more candidates:
+
+    python scripts/smoke_multimodal_alignment.py \
+      --retrieval-run-id UUID --candidate-id UUID
+
+For a readable full note-run evaluation:
+
+    python scripts/evaluate_note_alignment.py --retrieval-run-id UUID
+
+Both commands use persisted source media, real FFmpeg frame extraction and the
+configured LiteLLM chat model alias. They require a valid LITELLM_API_KEY; the
+known credential-less environment returns HTTP 401 and is not bypassed.
+Normal pytest uses FakeAlignmentProvider/FakeFrameExtractor and performs no
+network, CUDA, model download or real-video processing.

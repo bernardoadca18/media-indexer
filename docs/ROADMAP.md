@@ -42,13 +42,26 @@ Candidate Retrieval for notes and footage is implemented:
 - synchronous arbitrary-query, single-note and batch-note APIs;
 - strategy/configuration fingerprints and idempotent run reuse.
 
+Provider-neutral multimodal temporal alignment is implemented:
+
+- persisted AlignmentRun, AlignmentSubject and CandidateAlignment aggregates;
+- explicit RetrievalRun/candidate/Note provenance and versioned strategy/prompt;
+- candidate-only bounded dense JPEG sampling with managed DerivedAssets;
+- OpenAI-compatible LiteLLM multimodal provider with strict structured output;
+- explicit matched, unmatched, failed, not_evaluated and no_candidates semantics;
+- optional coarse-to-fine refinement and confidence-based early stop;
+- independent multimodal_alignment jobs with heartbeat, bounded attempts and
+  deterministic retry cleanup;
+- asynchronous creation plus run, paginated-result and candidate-detail APIs;
+- deterministic fake-provider coverage and opt-in real gameplay scripts.
+
 ## Planned
 
-1. Provider-neutral multimodal temporal alignment where unmatched is valid.
-2. Consolidated Semantic Timeline export and project/session Media Search.
+1. Consolidated Semantic Timeline export and project/session Media Search.
 
 Editorial work stays in Ideas Hub; voice, planning, composition and rendering
 stay in production services.
 
-There is still no confirmed note alignment, OCR, image captioning, Gemini
-alignment, multimodal understanding, consolidated Semantic Timeline or final
+There is still no OCR, image captioning, generic multimodal search, consolidated
+Semantic Timeline, project/session Media Search, Ideas Hub/Orchestrator
+integration or composition/rendering pipeline in this service.
