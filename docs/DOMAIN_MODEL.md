@@ -176,3 +176,33 @@ matched additionally projects the selected CandidateAlignment interval,
 confidence, bounded anchors and the TemporalSegments overlapping that interval.
 The projection never upgrades a candidate hypothesis or unmatched result into a
 different domain claim.
+
+
+## Media Search
+
+Media Search is a synchronous service, not a persisted entity. It exposes public
+search APIs without exposing TemporalIndex IDs, RetrievalRun, embeddings or
+pgvector. Session search resolves one completed TemporalIndex; project search
+aggregates compatible indexes across multiple sessions.
+
+The TemporalIndex resolution policy is explicit and documented. Requests may
+include temporal_index_id for explicit selection. Without it, default_latest
+selects the most recent completed index. When multiple completed indexes exist
+without explicit selection or default_latest semantics, the API returns 409
+Conflict rather than silently choosing.
+
+Compatibility signature is SHA-256(embedding_provider + "|" + embedding_model +
+"|" + dimensions). Project search groups sessions by this signature and embeds
+the query once per group. All sessions in a compatibility group reuse the same
+precomputed vector, optimizing embedding cost across sessions.
+
+MediaSearchRequest captures the query text, max_results, min_score, and optional
+filters (session_ids, time_range, duration_range). MediaSearchResponse returns
+ranked MediaSearchResult items with session_id, session_label, media_id,
+[start,end) interval, score, rank and transcript preview. Project responses
+include session summaries indicating searched/skipped sessions.
+
+The service reuses CandidateRetriever search logic via the same
+TemporalSearchService cosine search. Results are deduplicated within sessions
+by configurable overlap threshold and globally ranked by score. No multimodal
+alignment is triggered; the API returns deterministic retrieval results only.

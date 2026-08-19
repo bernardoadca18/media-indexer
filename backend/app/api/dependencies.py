@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Annotated
 
@@ -5,7 +6,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import get_db as _get_db
 from app.services.embedding_provider import (
     EmbeddingProvider,
     LiteLLMEmbeddingProvider,
@@ -25,6 +26,11 @@ def get_embedding_provider() -> EmbeddingProvider:
         settings.litellm_api_key,
         settings.embedding_timeout_seconds,
     )
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    async for session in _get_db():
+        yield session
 
 
 EmbeddingDep = Annotated[EmbeddingProvider, Depends(get_embedding_provider)]

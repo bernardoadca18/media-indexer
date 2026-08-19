@@ -297,6 +297,103 @@ assembly performs no provider, embedding, FFmpeg, storage write or job work.
 It therefore requires no new entity or migration.
 
 
+## Media Search
+
+Media Search provides a public API for finding footage without requiring
+knowledge of internal pipeline components like TemporalIndex IDs, RetrievalRun,
+embeddings, or pgvector.
+
+### Session Search
+
+Search within a single session:
+
+    POST /media-search/sessions/{session_id}
+    {
+        "query": "Geralt learning Aard",
+        "max_results": 5
+    }
+
+Response:
+
+    {
+        "query": "Geralt learning Aard",
+        "scope": "session",
+        "project_id": "...",
+        "session_id": "...",
+        "results": [
+            {
+                "session_id": "...",
+                "media_id": "...",
+                "start_seconds": 123.4,
+                "end_seconds": 156.2,
+                "duration_seconds": 32.8,
+                "score": 0.89,
+                "rank": 1,
+                "session_label": "Session 001",
+                "media_filename": "gameplay_001.mp4",
+                "temporal_index_id": "...",
+                "transcript_preview": "...",
+                "matched_note_ids": []
+            }
+        ],
+        "searched_sessions": 1,
+        "skipped_sessions": 0,
+        "strategy": "media_search_v1"
+    }
+
+### Project Search
+
+Search across all eligible sessions in a project:
+
+    POST /media-search/projects/{project_id}
+    {
+        "query": "combat against drowners",
+        "max_results": 10,
+        "min_score": 0.3
+    }
+
+Results are globally ranked by score and deduplicated within sessions.
+
+### Filters
+
+Both endpoints support filters:
+
+- `start_seconds` / `end_seconds`: Time range filter (session search only)
+- `session_ids`: Limit search to specific sessions (project search only)
+- `exclude_session_ids`: Exclude specific sessions (project search only)
+- `min_score`: Minimum relevance score (default 0.25)
+- `max_results`: Maximum results to return (default 10, max 100)
+- `max_duration_seconds`: Filter by maximum footage duration
+- `temporal_index_id`: Explicit index selection (advanced)
+
+### TemporalIndex Resolution
+
+Media Search automatically resolves the appropriate completed TemporalIndex:
+
+1. If `temporal_index_id` is specified, validate and use it
+2. Otherwise, select the most recently created completed index matching the
+   configured embedding provider
+3. If no suitable index exists, return HTTP 409 Conflict
+
+### Query Embedding Reuse
+
+For project search, the query is embedded ONCE per compatibility group
+(same provider/model/dimensions), not once per session. This optimizes
+cost and latency for multi-session searches.
+
+### Compatibility Validation
+
+Project search only aggregates results from TemporalIndexes with compatible
+embedding configurations. Sessions with incompatible indexes are skipped
+with an explanatory reason.
+
+### No Automatic Alignment
+
+Media Search performs deterministic vector similarity search only.
+It does NOT invoke multimodal alignment by default. Alignment is optional
+enrichment when available through existing AlignmentRun data.
+
+
 ## Long-running jobs
 
 Processing jobs record heartbeat_at, attempt_count and max_attempts. On startup,
@@ -385,3 +482,33 @@ configured LiteLLM chat model alias. They require a valid LITELLM_API_KEY; the
 known credential-less environment returns HTTP 401 and is not bypassed.
 Normal pytest uses FakeAlignmentProvider/FakeFrameExtractor and performs no
 network, CUDA, model download or real-video processing.
+
+
+## Media Search smokes
+
+The deterministic media search smoke creates test data and validates session
+and project search functionality:
+
+    python scripts/smoke_media_search.py
+
+This verifies:
+- Session search returns ranked results
+- Project search aggregates multiple sessions
+- Query is embedded only once per compatibility group
+- Cross-session ranking works correctly
+- Zero results is handled properly
+
+For real evaluation with existing data:
+
+    python scripts/search_media.py \
+        --project-id UUID \
+        --query "Geralt learning Aard"
+
+Or session-specific:
+
+    python scripts/search_media.py \
+        --session-id UUID \
+        --query "combat against drowners"
+
+The evaluation script uses LiteLLM when configured, or falls back to a fake
+provider for testing.

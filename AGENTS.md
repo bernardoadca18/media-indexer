@@ -56,6 +56,12 @@ invoke providers, embeddings, FFmpeg or jobs, never expose vectors/image bytes,
 and preserve Note.raw exactly. Use compact normalized evidence references and
 the documented [start,end) overlap semantics.
 
-The next roadmap phase is Project/Session Media Search. Do not add editorial
-ranking, script generation, Ideas Hub/Orchestrator integration, composition or
-rendering in advance.
+Project/Session Media Search is now implemented as a synchronous public API.
+Keep TemporalIndex resolution explicit with documented conflict handling. Embed
+the query once per compatibility group, not per session. Reuse CandidateRetriever
+logic without duplicating code. No automatic multimodal alignment. Tests use fake
+embeddings; real LiteLLM evaluation is an explicit smoke.
+
+The next roadmap phase is Integration with Ideas Hub / game_analysis workflow.
+Do not add editorial ranking, script generation, composition or rendering in
+advance.

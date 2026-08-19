@@ -10,6 +10,7 @@ from app.api.routers import (
     alignments,
     candidate_retrieval,
     jobs,
+    media_search,
     projects,
     semantic_timeline,
     sessions,
@@ -51,6 +52,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(candidate_retrieval.router)
     application.include_router(alignments.router)
     application.include_router(jobs.router)
+    application.include_router(media_search.router)
 
     @application.get("/health", tags=["health"])
     async def health(db: DB) -> dict[str, str]:

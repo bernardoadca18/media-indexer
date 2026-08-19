@@ -67,13 +67,24 @@ Consolidated Semantic Timeline is implemented as a read-only projection:
   invocation;
 - no persistence duplication and therefore no schema migration.
 
+Project/Session Media Search is implemented as a public search API:
+
+- synchronous session-level and project-level footage search;
+- deterministic TemporalIndex resolution with explicit selection policy;
+- query embedding reuse for cross-session cost optimization;
+- compatibility signature validation for cross-session aggregation;
+- reuse of existing Candidate Retrieval logic without duplication;
+- no automatic multimodal alignment (deterministic retrieval only);
+- ranked results with session labels and transcript previews;
+- session and project filter support;
+- deterministic smoke tests and manual evaluation scripts.
+
 ## Planned
 
-1. Project/Session Media Search.
+1. Integration with Ideas Hub / game_analysis workflow.
 
 Editorial work stays in Ideas Hub; voice, planning, composition and rendering
 stay in production services.
 
 There is still no OCR, image captioning, generic multimodal search,
-Project/Session Media Search, Ideas Hub/Orchestrator integration or
-composition/rendering pipeline in this service.
+Ideas Hub/Orchestrator integration or composition/rendering pipeline in this service.

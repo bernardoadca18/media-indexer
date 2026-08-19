@@ -250,3 +250,38 @@ selected-result overlaps are likewise batch-loaded, yielding a bounded query
 count independent of page size and avoiding ORM lazy-load N+1 behavior.
 Timeline assembly invokes no worker, LLM, embedding provider, FFmpeg or storage
 mutation.
+
+
+## Project/Session Media Search
+
+POST /media-search/sessions/{session_id} and POST /media-search/projects/{project_id}
+are synchronous public APIs for searching footage without exposing TemporalIndex IDs,
+RetrievalRun, embeddings or pgvector. Session search resolves one completed
+TemporalIndex; project search aggregates compatible indexes across sessions.
+
+TemporalIndex resolution is explicit with a documented policy. The request may include
+temporal_index_id to select a specific index. Without explicit selection, default_latest
+resolves the most recent completed index. When multiple completed indexes exist without
+explicit selection or default_latest semantics, the API returns 409 Conflict rather than
+silently choosing an arbitrary index.
+
+Compatibility signature is SHA-256(embedding_provider + "|" + embedding_model + "|" +
+dimensions). Project search groups sessions by this signature and embeds the query once
+per group. All sessions in a group reuse the same precomputed vector, so a 10-session
+project with identical embedding configuration incurs one embedding call, not ten.
+
+The service reuses CandidateRetriever's search logic without duplicating code. It
+builds the same candidate definitions and calls the same TemporalSearchService cosine
+search. Results are deduplicated within sessions by configurable overlap threshold and
+globally ranked across sessions. The top result always has rank 1.
+
+Project search returns session summaries indicating which sessions were searched and
+which were skipped (no compatible TemporalIndex, explicit filter, or conflict). Session
+labels and transcript previews provide context without requiring separate API calls.
+No multimodal alignment is triggered; the API returns deterministic retrieval results
+only.
+
+EmbeddingProvider follows the same pattern as other stages. LiteLLMEmbeddingProvider
+targets the OpenAI-compatible /v1/embeddings endpoint. FakeEmbeddingProvider enables
+deterministic testing without external dependencies. The service validates provider
+responses for dimension count and finite values before search.
