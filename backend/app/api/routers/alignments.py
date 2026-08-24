@@ -5,11 +5,13 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.dependencies import DB
 from app.core.config import settings
+from app.models import MediaSession
 from app.repositories.alignment import AlignmentRepository
 from app.schemas.alignment import (
     AlignmentAcceptedOut,
     AlignmentCreate,
     AlignmentRunDetailOut,
+    AlignmentRunOut,
     CandidateAlignmentOut,
     CandidateAlignmentPageOut,
 )
@@ -106,6 +108,30 @@ async def get_alignment_run(
         alignment_run=run,
         subjects=list(await repository.subjects(run.id)),
     )
+
+
+@router.get(
+    "/sessions/{session_id}/alignment-runs",
+    response_model=list[AlignmentRunOut],
+)
+async def list_session_alignment_runs(
+    session_id: UUID,
+    db: DB,
+    status: Annotated[str | None, Query()] = None,
+) -> list[AlignmentRunOut]:
+    """List AlignmentRuns for a session, optionally filtered by status.
+
+    Most recent first. This supports discovery of compatible alignment runs
+    for semantic timeline retrieval.
+    """
+    # Verify session exists
+    session = await db.get(MediaSession, session_id)
+    if session is None:
+        raise HTTPException(404, "session not found")
+
+    repository = AlignmentRepository(db)
+    runs = await repository.list_runs_by_session(session_id, status=status)
+    return list(runs)
 
 
 @router.get(

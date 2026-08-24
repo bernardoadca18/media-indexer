@@ -114,3 +114,22 @@ class AlignmentRepository:
             .order_by(DerivedAsset.timestamp_seconds, DerivedAsset.id)
         )
         return result.scalars().all()
+
+    async def list_runs_by_session(
+        self,
+        session_id: UUID,
+        status: str | None = None,
+    ) -> Sequence[AlignmentRun]:
+        """List AlignmentRuns for a session, optionally filtered by status.
+
+        Returns runs ordered by created_at descending (most recent first).
+        """
+        statement = select(AlignmentRun).where(
+            AlignmentRun.session_id == session_id
+        )
+        if status:
+            statement = statement.where(AlignmentRun.status == status)
+        result = await self.db.execute(
+            statement.order_by(AlignmentRun.created_at.desc())
+        )
+        return result.scalars().all()
