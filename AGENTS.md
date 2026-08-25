@@ -62,6 +62,10 @@ the query once per compatibility group, not per session. Reuse CandidateRetrieve
 logic without duplicating code. No automatic multimodal alignment. Tests use fake
 embeddings; real LiteLLM evaluation is an explicit smoke.
 
+Stage 16 source materialization is supported through read-only MediaAsset metadata/content routes.
+Keep lookup restricted to logical IDs and managed storage resolution. Metadata must not expose
+storage_uri or host paths; content streaming must never accept a caller-supplied path or URL.
+
 The next roadmap phase is Integration with Ideas Hub / game_analysis workflow.
 Do not add editorial ranking, script generation, composition or rendering in
 advance.

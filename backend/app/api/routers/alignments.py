@@ -131,7 +131,7 @@ async def list_session_alignment_runs(
 
     repository = AlignmentRepository(db)
     runs = await repository.list_runs_by_session(session_id, status=status)
-    return list(runs)
+    return [AlignmentRunOut.model_validate(run) for run in runs]
 
 
 @router.get(

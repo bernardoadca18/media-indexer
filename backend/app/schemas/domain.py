@@ -45,6 +45,25 @@ class MediaOut(ORMModel):
     probe_metadata: dict[str, Any] | None
 
 
+class MediaAssetMetadataOut(ORMModel):
+    """Safe public identity for source materialization; never exposes storage details."""
+
+    id: UUID
+    project_id: UUID
+    original_filename: str
+    content_type: str | None
+    byte_size: int = Field(ge=0)
+    sha256: str = Field(min_length=64, max_length=64)
+    duration_seconds: float | None = Field(default=None, gt=0)
+    format_name: str | None
+    video_codec: str | None
+    audio_codec: str | None
+    fps: float | None = Field(default=None, gt=0)
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
+    created_at: datetime
+
+
 class SessionSummary(ORMModel):
     id: UUID
     project_id: UUID

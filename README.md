@@ -26,6 +26,18 @@ Consulte GET /jobs/{job_id} e GET /sessions/{session_id}.
     ruff check app tests
     mypy app
 
+## Managed source materialization
+
+Stage 16 Video Composer resolves original gameplay through read-only logical-ID contracts:
+
+    GET /media-assets/{media_id}
+    GET /media-assets/{media_id}/content
+
+Metadata includes the immutable SHA-256, byte size and technical media fields, but never exposes
+`storage_uri`, probe blobs or host paths. The content endpoint resolves only a database-owned
+MediaAsset through configured managed storage and supports HTTP byte ranges. Callers cannot supply
+paths or arbitrary URLs. No schema migration was required for this projection.
+
 ## Timestamped transcription
 
 After the initial_index job makes a session ready, request transcription without

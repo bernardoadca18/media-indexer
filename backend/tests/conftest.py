@@ -4,6 +4,7 @@ Default fixtures use SQLite for unit tests.
 For PostgreSQL integration tests, use @pytest.mark.postgres and request
 postgres_session_factory/postgres_db/postgres_client fixtures explicitly.
 """
+
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -12,8 +13,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.api.dependencies import get_db as get_api_db
 from app.api.dependencies import get_storage
-from app.core.database import get_db
+from app.core.database import get_db as get_core_db
 from app.main import create_app
 from app.models import Base
 from app.services.storage import LocalStorage
@@ -48,7 +50,11 @@ def client(session_factory, tmp_path: Path):
         async with session_factory() as session:
             yield session
 
-    app.dependency_overrides[get_db] = database
+    # Most routers use the API dependency wrapper while media search imports the
+    # core dependency directly. Override both so unit tests never reach the real
+    # PostgreSQL configured in the developer environment.
+    app.dependency_overrides[get_api_db] = database
+    app.dependency_overrides[get_core_db] = database
     app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
     with TestClient(app) as test_client:
         yield test_client

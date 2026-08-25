@@ -10,6 +10,7 @@ from app.api.routers import (
     alignments,
     candidate_retrieval,
     jobs,
+    media_assets,
     media_search,
     projects,
     semantic_timeline,
@@ -52,6 +53,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(candidate_retrieval.router)
     application.include_router(alignments.router)
     application.include_router(jobs.router)
+    application.include_router(media_assets.router)
     application.include_router(media_search.router)
 
     @application.get("/health", tags=["health"])

@@ -6,7 +6,15 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import MediaProject, MediaSession, ProcessingJob
+from app.models import MediaAsset, MediaProject, MediaSession, ProcessingJob
+
+
+class MediaAssetRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def get(self, media_id: UUID) -> MediaAsset | None:
+        return await self.db.get(MediaAsset, media_id)
 
 
 class ProjectRepository:
