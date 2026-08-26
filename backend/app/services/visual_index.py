@@ -273,9 +273,14 @@ class VisualIndexProcessor:
     async def run(self, job: ProcessingJob) -> None:
         if job.visual_index_id is None:
             raise ValueError("visual index job has no visual_index_id")
+        job_id = job.id
+        visual_index_id = job.visual_index_id
+        project_id = job.project_id
+        session_id = job.session_id
+        media_id = job.media_id
         repository = VisualIndexRepository(self.db)
-        visual_index = await repository.get(job.visual_index_id)
-        media = await self.db.get(MediaAsset, job.media_id)
+        visual_index = await repository.get(visual_index_id)
+        media = await self.db.get(MediaAsset, media_id)
         if visual_index is None or media is None:
             raise LookupError("visual index resources not found")
         if visual_index.detector != self.detector.name:
@@ -288,7 +293,7 @@ class VisualIndexProcessor:
         duration = media.duration_seconds
         source = self.storage.resolve(media.storage_uri)
         await self.storage.delete_derived_namespace(
-            job.project_id, job.session_id, "visual", visual_index.id
+            project_id, session_id, "visual", visual_index.id
         )
         await repository.clear_outputs(visual_index.id)
         visual_index.status = "processing"
@@ -300,11 +305,11 @@ class VisualIndexProcessor:
         await self.db.commit()
         logger.info(
             "visual_index_started",
-            project_id=str(job.project_id),
-            session_id=str(job.session_id),
-            media_id=str(job.media_id),
+            project_id=str(project_id),
+            session_id=str(session_id),
+            media_id=str(media_id),
             visual_index_id=str(visual_index.id),
-            job_id=str(job.id),
+            job_id=str(job_id),
             duration=duration,
         )
 
@@ -358,8 +363,8 @@ class VisualIndexProcessor:
                     f"frame-{sequence:06d}-" f"{round(candidate.timestamp_seconds * 1000):012d}.jpg"
                 )
                 stored = await self.storage.save_derived(
-                    job.project_id,
-                    job.session_id,
+                    project_id,
+                    session_id,
                     "visual",
                     visual_index.id,
                     "frames",
@@ -368,10 +373,10 @@ class VisualIndexProcessor:
                 )
                 self.db.add(
                     DerivedAsset(
-                        project_id=job.project_id,
-                        session_id=job.session_id,
-                        media_id=job.media_id,
-                        visual_index_id=visual_index.id,
+                        project_id=project_id,
+                        session_id=session_id,
+                        media_id=media_id,
+                        visual_index_id=visual_index_id,
                         kind="representative_frame",
                         storage_uri=stored.uri,
                         mime_type=extracted.mime_type,
@@ -412,11 +417,11 @@ class VisualIndexProcessor:
             await self.db.commit()
             logger.info(
                 "visual_index_completed",
-                project_id=str(job.project_id),
-                session_id=str(job.session_id),
-                media_id=str(job.media_id),
-                visual_index_id=str(visual_index.id),
-                job_id=str(job.id),
+                project_id=str(project_id),
+                session_id=str(session_id),
+                media_id=str(media_id),
+                visual_index_id=str(visual_index_id),
+                job_id=str(job_id),
                 stage="finalizing",
                 scene_count=scene_count,
                 frame_count=frame_count,
@@ -426,15 +431,15 @@ class VisualIndexProcessor:
             await self.db.rollback()
             try:
                 await self.storage.delete_derived_namespace(
-                    job.project_id, job.session_id, "visual", job.visual_index_id
+                    project_id, session_id, "visual", visual_index_id
                 )
             except Exception:
                 logger.exception(
                     "visual_index_storage_cleanup_failed",
-                    visual_index_id=str(job.visual_index_id),
-                    job_id=str(job.id),
+                    visual_index_id=str(visual_index_id),
+                    job_id=str(job_id),
                 )
-            visual_index = await repository.get(job.visual_index_id)
+            visual_index = await repository.get(visual_index_id)
             if visual_index is not None:
                 await repository.clear_outputs(visual_index.id)
                 visual_index.status = "failed"
@@ -442,12 +447,12 @@ class VisualIndexProcessor:
                 await self.db.commit()
             logger.exception(
                 "visual_index_failed",
-                project_id=str(job.project_id),
-                session_id=str(job.session_id),
-                media_id=str(job.media_id),
-                visual_index_id=str(job.visual_index_id),
-                job_id=str(job.id),
-                stage=job.stage,
+                project_id=str(project_id),
+                session_id=str(session_id),
+                media_id=str(media_id),
+                visual_index_id=str(visual_index_id),
+                job_id=str(job_id),
+                stage="failed",
                 scene_count=scene_count,
                 frame_count=frame_count,
                 duration=duration,

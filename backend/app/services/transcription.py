@@ -158,9 +158,12 @@ class TranscriptionProcessor:
     async def run(self, job: ProcessingJob) -> None:
         if job.transcription_id is None:
             raise ValueError("transcription job has no transcription_id")
+        job_id = job.id
+        transcription_id = job.transcription_id
+        media_id = job.media_id
         repository = TranscriptionRepository(self.db)
-        transcription = await repository.get(job.transcription_id)
-        media = await self.db.get(MediaAsset, job.media_id)
+        transcription = await repository.get(transcription_id)
+        media = await self.db.get(MediaAsset, media_id)
         if transcription is None or media is None:
             raise LookupError("transcription resources not found")
 
@@ -232,9 +235,10 @@ class TranscriptionProcessor:
             await self.db.commit()
         except Exception:
             await self.db.rollback()
-            transcription = await repository.get(job.transcription_id)
+            transcription = await repository.get(transcription_id)
             if transcription is not None:
                 transcription.status = "failed"
                 transcription.completed_at = datetime.now(UTC)
                 await self.db.commit()
+            logger.exception("transcription_failed", job_id=str(job_id))
             raise
