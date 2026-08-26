@@ -55,6 +55,7 @@ def embedding_provider() -> FakeEmbeddingProvider:
 # Unit test fixtures (SQLite) - for tests that don't need pgvector
 # =============================================================================
 
+
 @pytest.fixture
 async def project(db: AsyncSession) -> MediaProject:
     project = MediaProject(name="Test Project")
@@ -214,6 +215,7 @@ async def temporal_index(
 # =============================================================================
 # PostgreSQL integration test fixtures - for tests requiring pgvector
 # =============================================================================
+
 
 @pytest.fixture
 async def pg_project(postgres_db: AsyncSession) -> MediaProject:
@@ -379,6 +381,7 @@ async def pg_temporal_index(
 # Unit tests (SQLite)
 # =============================================================================
 
+
 class TestQueryNormalization:
     """Tests for query normalization."""
 
@@ -495,6 +498,7 @@ class TestTemporalIndexResolution:
 # =============================================================================
 # PostgreSQL integration tests - require pgvector cosine_distance
 # =============================================================================
+
 
 @pytest.mark.postgres
 class TestSessionSearch:

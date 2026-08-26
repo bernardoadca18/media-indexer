@@ -175,6 +175,9 @@ class VisualIndexService:
             raise VisualSessionNotReadyError("session must be ready before visual indexing")
         if session.media.duration_seconds is None or session.media.duration_seconds <= 0:
             raise MediaDurationUnavailableError("media duration is required for visual indexing")
+        project_id = session.project_id
+        stored_session_id = session.id
+        media_id = session.media_id
 
         config: dict[str, Any] = {
             "scene_detection_enabled": request.scene_detection_enabled,
@@ -190,7 +193,7 @@ class VisualIndexService:
         fingerprint = visual_configuration_fingerprint(request.scene_detector, config)
         indexes = VisualIndexRepository(self.db)
         jobs = JobRepository(self.db)
-        existing = await indexes.by_fingerprint(session.media_id, fingerprint)
+        existing = await indexes.by_fingerprint(media_id, fingerprint)
         if existing is not None:
             job = await jobs.for_visual_index(existing.id)
             if job is None:
@@ -216,9 +219,9 @@ class VisualIndexService:
             return EnsureVisualIndexResult(existing, job, enqueue, False)
 
         visual_index = VisualIndex(
-            project_id=session.project_id,
-            session_id=session.id,
-            media_id=session.media_id,
+            project_id=project_id,
+            session_id=stored_session_id,
+            media_id=media_id,
             status="pending",
             detector=request.scene_detector,
             configuration=config,
@@ -228,9 +231,9 @@ class VisualIndexService:
         try:
             await self.db.flush()
             job = ProcessingJob(
-                project_id=session.project_id,
-                session_id=session.id,
-                media_id=session.media_id,
+                project_id=project_id,
+                session_id=stored_session_id,
+                media_id=media_id,
                 visual_index_id=visual_index.id,
                 job_type="visual_index",
                 status="pending",
@@ -243,7 +246,7 @@ class VisualIndexService:
             await self.db.commit()
         except IntegrityError as exc:
             await self.db.rollback()
-            existing = await indexes.by_fingerprint(session.media_id, fingerprint)
+            existing = await indexes.by_fingerprint(media_id, fingerprint)
             if existing is None:
                 raise exc
             existing_job = await jobs.for_visual_index(existing.id)

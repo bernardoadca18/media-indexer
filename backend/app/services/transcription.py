@@ -62,6 +62,9 @@ class TranscriptionService:
             raise LookupError("session not found")
         if session.status != "ready":
             raise SessionNotReadyError("session must be ready before transcription")
+        project_id = session.project_id
+        stored_session_id = session.id
+        media_id = session.media_id
 
         config: dict[str, Any] = {
             "model": request.model,
@@ -74,7 +77,7 @@ class TranscriptionService:
         fingerprint = configuration_fingerprint("faster-whisper", config)
         transcriptions = TranscriptionRepository(self.db)
         jobs = JobRepository(self.db)
-        existing = await transcriptions.by_fingerprint(session.media_id, fingerprint)
+        existing = await transcriptions.by_fingerprint(media_id, fingerprint)
         if existing is not None:
             job = await jobs.for_transcription(existing.id)
             if job is None:
@@ -102,9 +105,9 @@ class TranscriptionService:
             return EnsureTranscriptionResult(existing, job, enqueue, False)
 
         transcription = Transcription(
-            project_id=session.project_id,
-            session_id=session.id,
-            media_id=session.media_id,
+            project_id=project_id,
+            session_id=stored_session_id,
+            media_id=media_id,
             provider="faster-whisper",
             model=request.model,
             language_requested=request.language,
@@ -116,9 +119,9 @@ class TranscriptionService:
         try:
             await self.db.flush()
             job = ProcessingJob(
-                project_id=session.project_id,
-                session_id=session.id,
-                media_id=session.media_id,
+                project_id=project_id,
+                session_id=stored_session_id,
+                media_id=media_id,
                 transcription_id=transcription.id,
                 job_type="transcription",
                 status="pending",
@@ -131,7 +134,7 @@ class TranscriptionService:
             await self.db.commit()
         except IntegrityError as exc:
             await self.db.rollback()
-            existing = await transcriptions.by_fingerprint(session.media_id, fingerprint)
+            existing = await transcriptions.by_fingerprint(media_id, fingerprint)
             if existing is None:
                 raise exc
             existing_job = await jobs.for_transcription(existing.id)

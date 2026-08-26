@@ -28,7 +28,7 @@ from app.services.storage import LocalStorage
 
 POSTGRES_TEST_URL = os.getenv(
     "POSTGRES_TEST_URL",
-    "postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test"
+    "postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test",
 )
 
 
@@ -58,14 +58,15 @@ async def postgres_db(postgres_session_factory) -> AsyncIterator[AsyncSession]:
     """
     async with postgres_session_factory() as session:
         # Truncate all tables before each test for isolation
-        result = await session.execute(text(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
-        ))
+        result = await session.execute(
+            text(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+            )
+        )
         tables = [row[0] for row in result.fetchall()]
         if tables:
-            await session.execute(text(
-                f"TRUNCATE TABLE {', '.join(tables)} CASCADE"
-            ))
+            await session.execute(text(f"TRUNCATE TABLE {', '.join(tables)} CASCADE"))
             await session.commit()
         yield session
 

@@ -222,10 +222,14 @@ class AlignmentService:
             raise LookupError("retrieval run not found")
         if retrieval_run.status != "completed":
             raise AlignmentPrerequisiteError("retrieval run must be completed before alignment")
+        project_id = retrieval_run.project_id
+        session_id = retrieval_run.session_id
+        media_id = retrieval_run.media_id
+        stored_retrieval_run_id = retrieval_run.id
         candidate_ids = set(request.candidate_ids) if request.candidate_ids is not None else None
         if candidate_ids is not None and len(candidate_ids) != len(request.candidate_ids or ()):
             raise AlignmentPrerequisiteError("candidate_ids must not contain duplicates")
-        candidates = list(await self.repository.candidates(retrieval_run.id, candidate_ids))
+        candidates = list(await self.repository.candidates(stored_retrieval_run_id, candidate_ids))
         if candidate_ids is not None and {item.id for item in candidates} != candidate_ids:
             raise AlignmentPrerequisiteError("every candidate must belong to the retrieval run")
         configured_subjects = _subject_definitions(retrieval_run.configuration)
@@ -239,7 +243,7 @@ class AlignmentService:
                 if item["subject_key"] in selected_keys
             ]
         configuration: dict[str, Any] = {
-            "retrieval_run_id": str(retrieval_run.id),
+            "retrieval_run_id": str(stored_retrieval_run_id),
             "candidate_ids": [str(item.id) for item in candidates],
             "subject_keys": subject_keys,
             "provider": self.provider_name,
@@ -252,7 +256,7 @@ class AlignmentService:
         }
         fingerprint = alignment_fingerprint(configuration)
         existing = await self.repository.by_fingerprint(
-            retrieval_run.id,
+            stored_retrieval_run_id,
             fingerprint,
         )
         if existing is not None:
@@ -278,10 +282,10 @@ class AlignmentService:
                 await self.db.commit()
             return EnsureAlignmentResult(existing, job, enqueue, False)
         run = AlignmentRun(
-            project_id=retrieval_run.project_id,
-            session_id=retrieval_run.session_id,
-            media_id=retrieval_run.media_id,
-            retrieval_run_id=retrieval_run.id,
+            project_id=project_id,
+            session_id=session_id,
+            media_id=media_id,
+            retrieval_run_id=stored_retrieval_run_id,
             provider=self.provider_name,
             model=request.model,
             strategy=ALIGNMENT_STRATEGY,
@@ -294,9 +298,9 @@ class AlignmentService:
         try:
             await self.db.flush()
             job = ProcessingJob(
-                project_id=retrieval_run.project_id,
-                session_id=retrieval_run.session_id,
-                media_id=retrieval_run.media_id,
+                project_id=project_id,
+                session_id=session_id,
+                media_id=media_id,
                 alignment_run_id=run.id,
                 job_type="multimodal_alignment",
                 status="pending",
@@ -310,7 +314,7 @@ class AlignmentService:
         except IntegrityError as exc:
             await self.db.rollback()
             concurrent = await self.repository.by_fingerprint(
-                retrieval_run.id,
+                stored_retrieval_run_id,
                 fingerprint,
             )
             if concurrent is None:

@@ -124,12 +124,8 @@ class AlignmentRepository:
 
         Returns runs ordered by created_at descending (most recent first).
         """
-        statement = select(AlignmentRun).where(
-            AlignmentRun.session_id == session_id
-        )
+        statement = select(AlignmentRun).where(AlignmentRun.session_id == session_id)
         if status:
             statement = statement.where(AlignmentRun.status == status)
-        result = await self.db.execute(
-            statement.order_by(AlignmentRun.created_at.desc())
-        )
+        result = await self.db.execute(statement.order_by(AlignmentRun.created_at.desc()))
         return result.scalars().all()
