@@ -480,7 +480,10 @@ class AlignmentProcessor:
     async def run(self, job: ProcessingJob) -> None:
         if job.alignment_run_id is None:
             raise ValueError("alignment job has no alignment_run_id")
-        run = await self.repository.get_run(job.alignment_run_id)
+        job_id = job.id
+        run_id = job.alignment_run_id
+        current_stage = "preparing_evidence"
+        run = await self.repository.get_run(run_id)
         if run is None:
             raise LookupError("alignment run not found")
         if run.provider != self.provider.name:
@@ -505,7 +508,7 @@ class AlignmentProcessor:
         run.completed_at = None
         run.provider_metadata = None
         run.usage_metadata = None
-        job.stage = "preparing_evidence"
+        job.stage = current_stage
         job.progress = 0.02
         await self.db.commit()
         config = AlignmentConfig(**run.configuration["frame_sampling"])
@@ -564,7 +567,8 @@ class AlignmentProcessor:
                         result.completed_at = datetime.now(UTC)
                         continue
                     result.status = "processing"
-                    job.stage = "coarse_alignment"
+                    current_stage = "coarse_alignment"
+                    job.stage = current_stage
                     result.started_at = datetime.now(UTC)
                     job.progress = 0.05 + 0.90 * processed / max(1, len(candidates))
                     job.heartbeat_at = datetime.now(UTC)
@@ -597,7 +601,8 @@ class AlignmentProcessor:
                             candidate.end_seconds,
                             config.refinement_padding_seconds,
                         )
-                        job.stage = "refining_alignment"
+                        current_stage = "refining_alignment"
+                        job.stage = current_stage
                         job.heartbeat_at = datetime.now(UTC)
                         await self.db.commit()
                         final_request = await builder.build(
@@ -657,7 +662,8 @@ class AlignmentProcessor:
             run.completed_at = datetime.now(UTC)
             run.usage_metadata = {"provider_calls": calls, "responses": usage}
             run.provider_metadata = {"responses": provider_meta}
-            job.stage = "finalizing"
+            current_stage = "finalizing"
+            job.stage = current_stage
             job.progress = 0.99
             job.heartbeat_at = datetime.now(UTC)
             await self.db.commit()
@@ -675,9 +681,9 @@ class AlignmentProcessor:
             )
         except Exception as exc:
             await self.db.rollback()
-            failed = await self.repository.get_run(run.id)
+            failed = await self.repository.get_run(run_id)
             if failed is not None:
-                results, _ = await self.repository.results(run.id, 0, 10000)
+                results, _ = await self.repository.results(run_id, 0, 10000)
                 for result in results:
                     if result.status == "processing":
                         result.status = "failed"
@@ -686,7 +692,7 @@ class AlignmentProcessor:
                         result.completed_at = datetime.now(UTC)
                         result.end_seconds = None
                         result.confidence = None
-                for subject in await self.repository.subjects(run.id):
+                for subject in await self.repository.subjects(run_id):
                     if subject.status == "pending":
                         subject.status = "failed"
                 failed.status = "failed"
@@ -695,9 +701,9 @@ class AlignmentProcessor:
                 await self.db.commit()
             logger.exception(
                 "multimodal_alignment_failed",
-                alignment_run_id=str(run.id),
-                job_id=str(job.id),
-                stage=job.stage,
+                alignment_run_id=str(run_id),
+                job_id=str(job_id),
+                stage=current_stage,
             )
             raise
 

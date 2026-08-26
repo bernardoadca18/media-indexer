@@ -100,6 +100,10 @@ class JobRunner:
         self.queue: asyncio.Queue[UUID] = asyncio.Queue()
         self.task: asyncio.Task[None] | None = None
 
+    @property
+    def operational(self) -> bool:
+        return self.task is not None and not self.task.done()
+
     async def start(self) -> None:
         cutoff = datetime.now(UTC) - timedelta(seconds=self.stale_timeout_seconds)
         async with self.session_factory() as db:

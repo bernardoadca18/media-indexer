@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
@@ -56,10 +56,18 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(media_assets.router)
     application.include_router(media_search.router)
 
-    @application.get("/health", tags=["health"])
-    async def health(db: DB) -> dict[str, str]:
-        await db.execute(text("SELECT 1"))
+    @application.get("/health/live", tags=["health"])
+    async def health_live() -> dict[str, str]:
         return {"status": "ok"}
+
+    async def readiness(db: DB) -> dict[str, str]:
+        await db.execute(text("SELECT 1"))
+        if enabled and not job_runner.operational:
+            raise HTTPException(503, "job worker is not operational")
+        return {"status": "ok"}
+
+    application.get("/health/ready", tags=["health"])(readiness)
+    application.get("/health", tags=["health"])(readiness)
 
     return application
 

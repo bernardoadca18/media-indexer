@@ -459,8 +459,11 @@ async def test_provider_failure_is_failed_not_unmatched_and_retry_rebuilds(
         )
         assert not await JobExecutor(db, registry).execute(ensured.job.id)
         await db.refresh(ensured.alignment_run)
+        await db.refresh(ensured.job)
         failed_results, _ = await AlignmentRepository(db).results(ensured.alignment_run.id)
         assert ensured.alignment_run.status == "failed"
+        assert "temporary upstream failure" in (ensured.job.error or "")
+        assert "MissingGreenlet" not in (ensured.job.error or "")
         assert failed_results[0].status == "failed"
         assert (
             failed_results[0].started_at is not None and failed_results[0].completed_at is not None

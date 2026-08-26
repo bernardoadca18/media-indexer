@@ -190,6 +190,7 @@ async def test_failure_keeps_session_ready_and_retry_replaces_partial_segments(
 
         assert result.transcription.status == "failed"
         assert result.job.status == "failed"
+        assert "provider interrupted" in (result.job.error or "")
         assert session.status == "ready"
         assert partial_total == 1
 

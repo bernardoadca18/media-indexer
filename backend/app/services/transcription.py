@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,8 @@ from app.repositories.domain import JobRepository, SessionRepository
 from app.repositories.transcription import TranscriptionRepository
 from app.services.storage import Storage
 from app.services.transcription_provider import TranscriptionConfig, TranscriptionProvider
+
+logger = structlog.get_logger(__name__)
 
 
 class SessionNotReadyError(ValueError):
