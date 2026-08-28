@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "auto"
     whisper_compute_type: str = "auto"
-    whisper_language: str = ""
+    whisper_language: str | None = None
     ffmpeg_binary: str = "ffmpeg"
     visual_index_batch_size: int = 25
     scene_detection_enabled: bool = True
@@ -69,6 +70,14 @@ class Settings(BaseSettings):
     whisper_beam_size: int = 5
     whisper_vad_filter: bool = True
     whisper_word_timestamps: bool = True
+
+    @field_validator("whisper_language", mode="before")
+    @classmethod
+    def normalize_whisper_language(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 @lru_cache

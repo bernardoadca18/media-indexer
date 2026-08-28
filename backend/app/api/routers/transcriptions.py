@@ -35,7 +35,7 @@ async def create_transcription(
     configured_language = (
         payload.language if payload.language is not None else settings.whisper_language
     )
-    language = configured_language.strip() or None
+    language = configured_language.strip() if configured_language else None
     request = TranscriptionRequest(
         model=payload.model or settings.whisper_model,
         language=language,

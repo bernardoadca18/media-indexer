@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
+def normalize_whisper_language(value: str | None) -> str | None:
+    """Normalize blank language values to Faster-Whisper autodetection."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 @dataclass(frozen=True)
 class TranscriptionConfig:
     model: str
@@ -88,11 +96,12 @@ class FasterWhisperProvider:
 
     async def transcribe(self, source: Path, config: TranscriptionConfig) -> TranscriptionStream:
         model = await self._get_model(config.model)
+        language = normalize_whisper_language(config.language)
 
         def start() -> tuple[Iterator[Any], Any]:
             segments, info = model.transcribe(
                 str(source),
-                language=config.language,
+                language=language,
                 beam_size=config.beam_size,
                 vad_filter=config.vad_filter,
                 word_timestamps=config.word_timestamps,
@@ -133,7 +142,7 @@ class FasterWhisperProvider:
             "duration_after_vad": getattr(info, "duration_after_vad", None),
         }
         return TranscriptionStream(
-            language=getattr(info, "language", None),
+            language=normalize_whisper_language(getattr(info, "language", None)) or language,
             duration_seconds=getattr(info, "duration", None),
             metadata=metadata,
             segments=results(),
