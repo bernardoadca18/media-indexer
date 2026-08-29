@@ -191,6 +191,7 @@ class TranscriptionProcessor:
             vad_filter=bool(transcription.configuration["vad_filter"]),
             word_timestamps=bool(transcription.configuration["word_timestamps"]),
         )
+        stream = None
         try:
             stream = await self.provider.transcribe(self.storage.resolve(media.storage_uri), config)
             transcription.language_detected = stream.language
@@ -248,3 +249,6 @@ class TranscriptionProcessor:
                 await self.db.commit()
             logger.exception("transcription_failed", job_id=str(job_id))
             raise
+        finally:
+            if stream is not None and stream.close is not None:
+                await stream.close()

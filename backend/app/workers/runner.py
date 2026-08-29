@@ -28,6 +28,7 @@ def build_default_registry() -> ProcessorRegistry:
     transcription_provider = FasterWhisperProvider(
         device=settings.whisper_device,
         compute_type=settings.whisper_compute_type,
+        model_lifetime=settings.whisper_model_lifetime,
     )
     scene_detector = FFmpegSceneDetector(settings.ffmpeg_binary)
     frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)

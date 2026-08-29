@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     whisper_device: str = "auto"
     whisper_compute_type: str = "auto"
     whisper_language: str | None = None
+    whisper_model_lifetime: Literal["resident", "per_job"] = "resident"
     ffmpeg_binary: str = "ffmpeg"
     visual_index_batch_size: int = 25
     scene_detection_enabled: bool = True

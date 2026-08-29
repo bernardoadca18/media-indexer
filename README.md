@@ -450,6 +450,7 @@ Whisper settings:
     WHISPER_DEVICE=auto
     WHISPER_COMPUTE_TYPE=auto
     WHISPER_LANGUAGE=
+    WHISPER_MODEL_LIFETIME=resident
     WHISPER_BEAM_SIZE=5
     WHISPER_VAD_FILTER=true
     WHISPER_WORD_TIMESTAMPS=true
@@ -459,6 +460,14 @@ reports an available CUDA device, otherwise CPU. The default Docker image is
 CPU-ready; CUDA operation also requires a GPU-enabled runtime and compatible
 host CUDA/cuDNN libraries. Model files use the Hugging Face cache mounted at
 /data/models in Docker.
+
+`resident` is the compatible lifetime default and lazily retains one model, replacing it only if a
+request selects a different model. `per_job` drops the provider reference after the lazy segment
+stream is completely consumed. Both policies serialize Faster-Whisper use across the entire stream;
+database writes remain batched. Provider metadata records lifetime and resolved-device semantics.
+A released Python reference is observable but is not proof that an allocator returned RAM/VRAM;
+real reclamation must be measured with an explicit external-model smoke before operationally
+selecting `per_job`.
 
 ## Real visual smoke
 
