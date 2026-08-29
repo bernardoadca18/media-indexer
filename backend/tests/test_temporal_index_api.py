@@ -35,15 +35,15 @@ class ApiEmbeddingProvider:
 
 
 async def seed_completed_inputs(client, session_factory):
-    project = client.post("/projects", json={"name": "Temporal API"}).json()
-    ingestion = client.post(
+    project = (await client.post("/projects", json={"name": "Temporal API"})).json()
+    ingestion = (await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "001"},
         files={
             "video": ("001.mp4", b"fake-video", "video/mp4"),
             "notes": ("001.txt", b"note", "text/plain"),
         },
-    ).json()
+    )).json()
     session_id = UUID(ingestion["session"]["id"])
     async with session_factory() as db:
         session = await db.get(MediaSession, session_id)
@@ -130,7 +130,7 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
         "transcription_id": str(transcription_id),
         "visual_index_id": str(visual_index_id),
     }
-    response = client.post(f"/sessions/{session_id}/temporal-indexes", json=payload)
+    response = await client.post(f"/sessions/{session_id}/temporal-indexes", json=payload)
     assert response.status_code == 202
     created = response.json()
     temporal_index_id = UUID(created["temporal_index"]["id"])
@@ -138,7 +138,7 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
     assert created["created"] is True
     assert created["job"]["temporal_index_id"] == str(temporal_index_id)
 
-    repeated = client.post(f"/sessions/{session_id}/temporal-indexes", json=payload)
+    repeated = await client.post(f"/sessions/{session_id}/temporal-indexes", json=payload)
     assert repeated.status_code == 202
     assert repeated.json()["created"] is False
     assert repeated.json()["temporal_index"]["id"] == str(temporal_index_id)
@@ -164,17 +164,17 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
         assert total == 2
         first_segment = records[0].segment
 
-    listing = client.get(f"/sessions/{session_id}/temporal-indexes")
+    listing = await client.get(f"/sessions/{session_id}/temporal-indexes")
     assert listing.status_code == 200
     assert [item["id"] for item in listing.json()] == [str(temporal_index_id)]
 
-    detail = client.get(f"/temporal-indexes/{temporal_index_id}")
+    detail = await client.get(f"/temporal-indexes/{temporal_index_id}")
     assert detail.status_code == 200
     assert detail.json()["status"] == "completed"
     assert detail.json()["transcription_id"] == str(transcription_id)
     assert detail.json()["visual_index_id"] == str(visual_index_id)
 
-    page = client.get(
+    page = await client.get(
         f"/temporal-indexes/{temporal_index_id}/segments",
         params={"offset": 0, "limit": 1},
     )
@@ -199,7 +199,7 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
 
     monkeypatch.setattr(TemporalIndexRepository, "search", fake_search)
     client.app.dependency_overrides[get_embedding_provider] = lambda: provider
-    search = client.post(
+    search = await client.post(
         f"/temporal-indexes/{temporal_index_id}/search",
         json={"query": "defend the lab", "limit": 5},
     )
@@ -229,7 +229,7 @@ async def test_temporal_index_api_requires_completed_explicit_inputs(
         visual_index.status = "failed"
         await db.commit()
 
-    response = client.post(
+    response = await client.post(
         f"/sessions/{session_id}/temporal-indexes",
         json={
             "transcription_id": str(transcription_id),

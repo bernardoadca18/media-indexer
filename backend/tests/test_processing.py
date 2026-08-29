@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +11,7 @@ from app.services.storage import LocalStorage
 
 class FakeProbe:
     async def inspect(self, path: Path) -> ProbeResult:
-        assert path.read_bytes() == b"video"
+        assert await asyncio.to_thread(path.read_bytes) == b"video"
         return ProbeResult(42.0, "mp4", "h264", "aac", 60.0, 1920, 1080, {"ok": True})
 
 

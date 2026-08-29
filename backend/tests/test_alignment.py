@@ -498,7 +498,7 @@ async def test_alignment_api_create_idempotency_queries_and_prerequisite(
         run_id = domain["retrieval"].id
         candidate_id = domain["candidates"][0].id
 
-    response = client.post(
+    response = await client.post(
         f"/retrieval-runs/{run_id}/alignments",
         json={"candidate_ids": [str(candidate_id)], "max_frames": 3},
     )
@@ -509,7 +509,7 @@ async def test_alignment_api_create_idempotency_queries_and_prerequisite(
     assert payload["job"]["job_type"] == "multimodal_alignment"
     assert payload["job"]["alignment_run_id"] == alignment_run_id
 
-    repeated = client.post(
+    repeated = await client.post(
         f"/retrieval-runs/{run_id}/alignments",
         json={"candidate_ids": [str(candidate_id)], "max_frames": 3},
     )
@@ -517,15 +517,15 @@ async def test_alignment_api_create_idempotency_queries_and_prerequisite(
     assert repeated.json()["created"] is False
     assert repeated.json()["alignment_run"]["id"] == alignment_run_id
 
-    detail = client.get(f"/alignment-runs/{alignment_run_id}")
-    results = client.get(f"/alignment-runs/{alignment_run_id}/results?offset=0&limit=10")
+    detail = await client.get(f"/alignment-runs/{alignment_run_id}")
+    results = await client.get(f"/alignment-runs/{alignment_run_id}/results?offset=0&limit=10")
     assert detail.status_code == 200
     assert detail.json()["alignment_run"]["status"] == "pending"
     assert detail.json()["subjects"] == []
     assert results.status_code == 200
     assert results.json()["total"] == 0
 
-    missing_candidate = client.post(
+    missing_candidate = await client.post(
         f"/retrieval-runs/{run_id}/alignments",
         json={"candidate_ids": [str(uuid4())]},
     )
@@ -534,7 +534,7 @@ async def test_alignment_api_create_idempotency_queries_and_prerequisite(
     async with session_factory() as db:
         incomplete = await seed_alignment_domain(db, completed=False)
         incomplete_id = incomplete["retrieval"].id
-    blocked = client.post(
+    blocked = await client.post(
         f"/retrieval-runs/{incomplete_id}/alignments",
         json={},
     )

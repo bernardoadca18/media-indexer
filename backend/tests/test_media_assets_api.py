@@ -1,9 +1,9 @@
 from uuid import uuid4
 
 
-def _ingest(client):
-    project = client.post("/projects", json={"name": "Composer source"}).json()
-    response = client.post(
+async def _ingest(client):
+    project = (await client.post("/projects", json={"name": "Composer source"})).json()
+    response = await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "source"},
         files={
@@ -15,10 +15,10 @@ def _ingest(client):
     return response.json()["session"]["media"]
 
 
-def test_media_asset_metadata_content_range_and_safety(client) -> None:
-    media = _ingest(client)
+async def test_media_asset_metadata_content_range_and_safety(client) -> None:
+    media = await _ingest(client)
 
-    response = client.get(f"/media-assets/{media['id']}")
+    response = await client.get(f"/media-assets/{media['id']}")
 
     assert response.status_code == 200
     assert response.json()["sha256"] == media["sha256"]
@@ -27,8 +27,8 @@ def test_media_asset_metadata_content_range_and_safety(client) -> None:
     assert "storage_uri" not in response.json()
     assert "probe_metadata" not in response.json()
 
-    full = client.get(f"/media-assets/{media['id']}/content")
-    partial = client.get(f"/media-assets/{media['id']}/content", headers={"Range": "bytes=2-5"})
+    full = await client.get(f"/media-assets/{media['id']}/content")
+    partial = await client.get(f"/media-assets/{media['id']}/content", headers={"Range": "bytes=2-5"})
 
     assert full.status_code == 200
     assert full.content == b"0123456789"
@@ -39,6 +39,6 @@ def test_media_asset_metadata_content_range_and_safety(client) -> None:
     assert partial.headers["content-range"] == "bytes 2-5/10"
     media_id = uuid4()
 
-    assert client.get(f"/media-assets/{media_id}").status_code == 404
-    assert client.get(f"/media-assets/{media_id}/content").status_code == 404
-    assert client.get("/media-assets/../../etc/passwd/content").status_code == 404
+    assert (await client.get(f"/media-assets/{media_id}")).status_code == 404
+    assert (await client.get(f"/media-assets/{media_id}/content")).status_code == 404
+    assert (await client.get("/media-assets/../../etc/passwd/content")).status_code == 404

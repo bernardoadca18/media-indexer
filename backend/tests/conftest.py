@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -19,6 +19,35 @@ from app.core.database import get_db as get_core_db
 from app.main import create_app
 from app.models import Base
 from app.services.storage import LocalStorage
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--postgres",
+        action="store_true",
+        default=False,
+        help="run explicit PostgreSQL/pgvector integration tests",
+    )
+    parser.addoption(
+        "--external",
+        action="store_true",
+        default=False,
+        help="run explicit external-provider/model smoke tests",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Keep the default suite local/CPU-only and require explicit integration opt-ins."""
+
+    run_postgres = config.getoption("--postgres")
+    run_external = config.getoption("--external")
+    postgres_skip = pytest.mark.skip(reason="requires explicit --postgres")
+    external_skip = pytest.mark.skip(reason="requires explicit --external")
+    for item in items:
+        if "postgres" in item.keywords and not run_postgres:
+            item.add_marker(postgres_skip)
+        if "external" in item.keywords and not run_external:
+            item.add_marker(external_skip)
 
 
 @pytest.fixture
@@ -42,8 +71,8 @@ async def db(session_factory) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-def client(session_factory, tmp_path: Path):
-    """TestClient with SQLite backend for unit tests."""
+async def client(session_factory, tmp_path: Path):
+    """Event-loop-local ASGI client with SQLite backend for API unit tests."""
     app = create_app(start_worker=False)
 
     async def database() -> AsyncIterator[AsyncSession]:
@@ -56,7 +85,11 @@ def client(session_factory, tmp_path: Path):
     app.dependency_overrides[get_api_db] = database
     app.dependency_overrides[get_core_db] = database
     app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
-    with TestClient(app) as test_client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as test_client:
+        test_client.app = app  # type: ignore[attr-defined]
         yield test_client
 
 

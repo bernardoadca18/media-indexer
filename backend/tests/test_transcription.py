@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
@@ -27,7 +28,7 @@ class FakeProvider:
         self.calls = 0
 
     async def transcribe(self, source: Path, config: TranscriptionConfig) -> TranscriptionStream:
-        assert source.read_bytes() == b"video"
+        assert await asyncio.to_thread(source.read_bytes) == b"video"
         assert config.model == "small"
         self.calls += 1
 

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,7 +23,7 @@ class FakeSceneDetector:
     async def detect(
         self, source: Path, duration_seconds: float, threshold: float
     ) -> list[SceneResult]:
-        assert source.read_bytes() == b"video"
+        assert await asyncio.to_thread(source.read_bytes) == b"video"
         assert duration_seconds == 30.0
         assert threshold == 10.0
         return [
@@ -49,7 +50,7 @@ class FakeFrameExtractor:
         if self.fail_after is not None and self.calls >= self.fail_after:
             raise RuntimeError("frame extraction interrupted")
         self.calls += 1
-        assert source.read_bytes() == b"video"
+        assert await asyncio.to_thread(source.read_bytes) == b"video"
         assert width == 640
         assert image_format == "jpeg"
         assert jpeg_quality == 85

@@ -6,15 +6,15 @@ from app.models import MediaSession, TranscriptSegment
 async def test_transcription_api_creation_idempotency_and_segment_pagination(
     client, session_factory
 ) -> None:
-    project = client.post("/projects", json={"name": "Witcher"}).json()
-    ingestion = client.post(
+    project = (await client.post("/projects", json={"name": "Witcher"})).json()
+    ingestion = (await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "001"},
         files={
             "video": ("001.mp4", b"fake-video", "video/mp4"),
             "notes": ("001.txt", b"note", "text/plain"),
         },
-    ).json()
+    )).json()
     session_id = UUID(ingestion["session"]["id"])
 
     async with session_factory() as db:
@@ -23,7 +23,7 @@ async def test_transcription_api_creation_idempotency_and_segment_pagination(
         session.status = "ready"
         await db.commit()
 
-    response = client.post(
+    response = await client.post(
         f"/sessions/{session_id}/transcriptions",
         json={"model": "small", "word_timestamps": True},
     )
@@ -34,7 +34,7 @@ async def test_transcription_api_creation_idempotency_and_segment_pagination(
     assert created["job"]["status"] == "pending"
     assert created["job"]["transcription_id"] == str(transcription_id)
 
-    repeated = client.post(
+    repeated = await client.post(
         f"/sessions/{session_id}/transcriptions",
         json={"model": "small", "word_timestamps": True},
     )
@@ -73,18 +73,18 @@ async def test_transcription_api_creation_idempotency_and_segment_pagination(
         )
         await db.commit()
 
-    listing = client.get(f"/sessions/{session_id}/transcriptions")
+    listing = await client.get(f"/sessions/{session_id}/transcriptions")
     assert listing.status_code == 200
     assert [item["id"] for item in listing.json()] == [str(transcription_id)]
 
-    detail = client.get(f"/transcriptions/{transcription_id}")
+    detail = await client.get(f"/transcriptions/{transcription_id}")
     assert detail.status_code == 200
     assert detail.json()["model"] == "small"
 
-    first_page = client.get(
+    first_page = await client.get(
         f"/transcriptions/{transcription_id}/segments", params={"offset": 0, "limit": 1}
     )
-    second_page = client.get(
+    second_page = await client.get(
         f"/transcriptions/{transcription_id}/segments", params={"offset": 1, "limit": 1}
     )
     assert first_page.status_code == 200
@@ -94,15 +94,15 @@ async def test_transcription_api_creation_idempotency_and_segment_pagination(
     assert second_page.json()["items"][0]["word_timestamps"][0]["probability"] == 0.9
 
 
-def test_transcription_requires_ready_session(client) -> None:
-    project = client.post("/projects", json={"name": "Witcher"}).json()
-    ingestion = client.post(
+async def test_transcription_requires_ready_session(client) -> None:
+    project = (await client.post("/projects", json={"name": "Witcher"})).json()
+    ingestion = (await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "001"},
         files={
             "video": ("001.mp4", b"fake-video", "video/mp4"),
             "notes": ("001.txt", b"note", "text/plain"),
         },
-    ).json()
-    response = client.post(f"/sessions/{ingestion['session']['id']}/transcriptions", json={})
+    )).json()
+    response = await client.post(f"/sessions/{ingestion['session']['id']}/transcriptions", json={})
     assert response.status_code == 409

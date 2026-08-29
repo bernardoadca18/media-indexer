@@ -17,12 +17,13 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.api.dependencies import get_db as get_api_db
 from app.api.dependencies import get_storage
-from app.core.database import get_db
+from app.core.database import get_db as get_core_db
 from app.main import create_app
 from app.services.storage import LocalStorage
 
@@ -72,15 +73,20 @@ async def postgres_db(postgres_session_factory) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-def postgres_client(postgres_session_factory, tmp_path: Path):
-    """Provide TestClient with PostgreSQL backend for integration tests."""
+async def postgres_client(postgres_session_factory, tmp_path: Path):
+    """Provide an event-loop-local ASGI client with PostgreSQL backend."""
     app = create_app(start_worker=False)
 
     async def database() -> AsyncIterator[AsyncSession]:
         async with postgres_session_factory() as session:
             yield session
 
-    app.dependency_overrides[get_db] = database
+    app.dependency_overrides[get_api_db] = database
+    app.dependency_overrides[get_core_db] = database
     app.dependency_overrides[get_storage] = lambda: LocalStorage(tmp_path)
-    with TestClient(app) as test_client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as test_client:
+        test_client.app = app  # type: ignore[attr-defined]
         yield test_client

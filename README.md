@@ -26,6 +26,33 @@ Consulte GET /jobs/{job_id} e GET /sessions/{session_id}.
     ruff check app tests
     mypy app
 
+### Topologia de testes
+
+A suíte padrão é CPU-only e usa SQLite em memória/fakes. Os testes de API são integralmente async:
+`httpx.AsyncClient` + `ASGITransport`, fixtures `pytest-asyncio` e a sessão SQLAlchemy executam no
+mesmo event loop. Cada teste recebe engine/storage próprios, portanto a suíte não depende de ordem,
+não compartilha estado e não alcança providers externos.
+
+```bash
+cd backend
+pytest
+```
+
+Comportamento que depende de PostgreSQL/pgvector é marcado `postgres` e usa um banco de teste
+explicitamente preparado, nunca o banco do operador:
+
+```bash
+POSTGRES_TEST_URL=postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test \
+  alembic upgrade head
+POSTGRES_TEST_URL=postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test \
+  pytest --postgres -m postgres
+```
+
+Testes `external` (modelos, LiteLLM, FFmpeg/credenciais quando aplicável) exigem `--external` e
+permanecem opt-in. Não
+converta testes pgvector em SQLite: a separação preserva a semântica real sem tornar toda a suíte
+unitária dependente de PostgreSQL.
+
 ## Managed source materialization
 
 Stage 16 Video Composer resolves original gameplay through read-only logical-ID contracts:

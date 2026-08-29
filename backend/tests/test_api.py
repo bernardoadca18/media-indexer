@@ -1,7 +1,7 @@
-def test_project_and_session_ingestion_preserve_raw(client) -> None:
-    project = client.post("/projects", json={"name": "Witcher"}).json()
+async def test_project_and_session_ingestion_preserve_raw(client) -> None:
+    project = (await client.post("/projects", json={"name": "Witcher"})).json()
     raw = " primeira nota  \r\n\r\nsegunda\r\nlinha\r\n"
-    response = client.post(
+    response = await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "001"},
         files={
@@ -20,7 +20,7 @@ def test_project_and_session_ingestion_preserve_raw(client) -> None:
     assert payload["session"]["media"]["storage_uri"].startswith("local://")
     assert payload["job"]["status"] == "pending"
 
-    repeated = client.post(
+    repeated = await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "ignored"},
         files={
@@ -31,14 +31,14 @@ def test_project_and_session_ingestion_preserve_raw(client) -> None:
     )
     assert repeated.json()["session"]["id"] == payload["session"]["id"]
 
-    detail = client.get(f"/sessions/{payload['session']['id']}")
+    detail = await client.get(f"/sessions/{payload['session']['id']}")
     assert detail.status_code == 200
     assert detail.json()["raw_notes"] == raw
-    assert client.get(f"/jobs/{payload['job']['id']}").status_code == 200
+    assert (await client.get(f"/jobs/{payload['job']['id']}")).status_code == 200
 
 
-def test_missing_project_is_404(client) -> None:
+async def test_missing_project_is_404(client) -> None:
     import uuid
 
-    response = client.get(f"/projects/{uuid.uuid4()}")
+    response = await client.get(f"/projects/{uuid.uuid4()}")
     assert response.status_code == 404

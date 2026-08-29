@@ -525,7 +525,7 @@ async def test_candidate_retrieval_api_contracts(
         "context_before_seconds": 15.0,
         "context_after_seconds": 40.0,
     }
-    created = client.post(
+    created = await client.post(
         f"/temporal-indexes/{temporal_index_id}/candidates",
         json=payload,
     )
@@ -538,7 +538,7 @@ async def test_candidate_retrieval_api_contracts(
     run_id = body["retrieval_run"]["id"]
     candidate_id = body["candidates"][0]["id"]
 
-    repeated = client.post(
+    repeated = await client.post(
         f"/temporal-indexes/{temporal_index_id}/candidates",
         json=payload,
     )
@@ -546,14 +546,14 @@ async def test_candidate_retrieval_api_contracts(
     assert repeated.json()["created"] is False
     assert repeated.json()["retrieval_run"]["id"] == run_id
 
-    detail = client.get(f"/retrieval-runs/{run_id}")
+    detail = await client.get(f"/retrieval-runs/{run_id}")
     assert detail.status_code == 200
     assert detail.json()["candidates"][0]["id"] == candidate_id
-    listing = client.get(f"/retrieval-runs/{run_id}/candidates")
+    listing = await client.get(f"/retrieval-runs/{run_id}/candidates")
     assert listing.status_code == 200
     assert len(listing.json()) == 2
 
-    evidence = client.get(f"/retrieval-candidates/{candidate_id}/evidence")
+    evidence = await client.get(f"/retrieval-candidates/{candidate_id}/evidence")
     assert evidence.status_code == 200, evidence.text
     evidence_body = evidence.json()
     assert evidence_body["note"] is None
@@ -561,7 +561,7 @@ async def test_candidate_retrieval_api_contracts(
     assert evidence_body["temporal_segments"][2]["text"] == ""
     assert evidence_body["frames"][0]["storage_uri"].startswith("local://")
 
-    single_note = client.post(
+    single_note = await client.post(
         f"/temporal-indexes/{temporal_index_id}/notes/{note_id}/candidates",
         json={},
     )
@@ -569,21 +569,21 @@ async def test_candidate_retrieval_api_contracts(
     assert single_note.json()["retrieval_run"]["kind"] == "notes"
     assert {item["note_id"] for item in single_note.json()["candidates"]} == {str(note_id)}
 
-    batch = client.post(
+    batch = await client.post(
         f"/temporal-indexes/{temporal_index_id}/note-retrievals",
         json={},
     )
     assert batch.status_code == 200, batch.text
     assert len({item["note_id"] for item in batch.json()["candidates"]}) == 2
 
-    no_results = client.post(
+    no_results = await client.post(
         f"/temporal-indexes/{temporal_index_id}/candidates",
         json={"query": "unknown retrieval phrase"},
     )
     assert no_results.status_code == 200
     assert no_results.json()["candidates"] == []
 
-    missing = client.post(
+    missing = await client.post(
         f"/temporal-indexes/{uuid4()}/candidates",
         json={"query": "Aard"},
     )
@@ -594,7 +594,7 @@ async def test_candidate_retrieval_api_contracts(
         assert temporal_index is not None
         temporal_index.status = "failed"
         await db.commit()
-    incomplete = client.post(
+    incomplete = await client.post(
         f"/temporal-indexes/{temporal_index_id}/candidates",
         json={"query": "different Aard query"},
     )

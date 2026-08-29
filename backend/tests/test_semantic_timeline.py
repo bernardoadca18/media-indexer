@@ -484,7 +484,7 @@ async def test_semantic_timeline_api_pagination_range_and_errors(
         await db.commit()
         other_session_id = other_session.id
 
-    response = client.get(
+    response = await client.get(
         f"/sessions/{session_id}/semantic-timeline",
         params={
             "temporal_index_id": str(temporal_id),
@@ -502,25 +502,25 @@ async def test_semantic_timeline_api_pagination_range_and_errors(
     assert [item["sequence"] for item in payload["items"]] == [3]
     assert payload["notes"][0]["alignment_status"] == "matched"
 
-    missing_session = client.get(
+    missing_session = await client.get(
         f"/sessions/{uuid4()}/semantic-timeline",
         params={"temporal_index_id": str(temporal_id)},
     )
     assert missing_session.status_code == 404
 
-    wrong_session = client.get(
+    wrong_session = await client.get(
         f"/sessions/{other_session_id}/semantic-timeline",
         params={"temporal_index_id": str(temporal_id)},
     )
     assert wrong_session.status_code == 409
 
-    missing_index = client.get(
+    missing_index = await client.get(
         f"/sessions/{session_id}/semantic-timeline",
         params={"temporal_index_id": str(uuid4())},
     )
     assert missing_index.status_code == 404
 
-    invalid_range = client.get(
+    invalid_range = await client.get(
         f"/sessions/{session_id}/semantic-timeline",
         params={
             "temporal_index_id": str(temporal_id),
@@ -543,7 +543,7 @@ async def test_incomplete_index_and_incompatible_alignment_are_rejected(
         temporal_id = domain["temporal"].id
         alignment_id = domain["alignment"].id
 
-    incomplete = client.get(
+    incomplete = await client.get(
         f"/sessions/{session_id}/semantic-timeline",
         params={"temporal_index_id": str(temporal_id)},
     )
@@ -557,7 +557,7 @@ async def test_incomplete_index_and_incompatible_alignment_are_rejected(
         temporal_id = domain["temporal"].id
         alignment_id = domain["alignment"].id
 
-    incomplete_alignment = client.get(
+    incomplete_alignment = await client.get(
         f"/sessions/{session_id}/semantic-timeline",
         params={
             "temporal_index_id": str(temporal_id),
@@ -585,7 +585,7 @@ async def test_incomplete_index_and_incompatible_alignment_are_rejected(
         await db.commit()
         incompatible_temporal_id = incompatible_temporal.id
 
-    incompatible_alignment = client.get(
+    incompatible_alignment = await client.get(
         f"/sessions/{session_id}/semantic-timeline",
         params={
             "temporal_index_id": str(incompatible_temporal_id),

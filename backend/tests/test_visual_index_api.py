@@ -6,15 +6,15 @@ from app.models import DerivedAsset, MediaAsset, MediaSession, SceneSegment, Vis
 async def test_visual_index_api_creation_idempotency_and_pagination(
     client, session_factory
 ) -> None:
-    project = client.post("/projects", json={"name": "Witcher"}).json()
-    ingestion = client.post(
+    project = (await client.post("/projects", json={"name": "Witcher"})).json()
+    ingestion = (await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "001"},
         files={
             "video": ("001.mp4", b"fake-video", "video/mp4"),
             "notes": ("001.txt", b"note", "text/plain"),
         },
-    ).json()
+    )).json()
     session_id = UUID(ingestion["session"]["id"])
 
     async with session_factory() as db:
@@ -32,7 +32,7 @@ async def test_visual_index_api_creation_idempotency_and_pagination(
         "frame_width": 640,
         "dedup_tolerance_seconds": 0.5,
     }
-    response = client.post(f"/sessions/{session_id}/visual-indexes", json=payload)
+    response = await client.post(f"/sessions/{session_id}/visual-indexes", json=payload)
     assert response.status_code == 202
     created = response.json()
     visual_index_id = UUID(created["visual_index"]["id"])
@@ -40,7 +40,7 @@ async def test_visual_index_api_creation_idempotency_and_pagination(
     assert created["job"]["status"] == "pending"
     assert created["job"]["visual_index_id"] == str(visual_index_id)
 
-    repeated = client.post(f"/sessions/{session_id}/visual-indexes", json=payload)
+    repeated = await client.post(f"/sessions/{session_id}/visual-indexes", json=payload)
     assert repeated.status_code == 202
     assert repeated.json()["created"] is False
     assert repeated.json()["visual_index"]["id"] == str(visual_index_id)
@@ -103,15 +103,15 @@ async def test_visual_index_api_creation_idempotency_and_pagination(
         )
         await db.commit()
 
-    listing = client.get(f"/sessions/{session_id}/visual-indexes")
+    listing = await client.get(f"/sessions/{session_id}/visual-indexes")
     assert listing.status_code == 200
     assert [item["id"] for item in listing.json()] == [str(visual_index_id)]
 
-    detail = client.get(f"/visual-indexes/{visual_index_id}")
+    detail = await client.get(f"/visual-indexes/{visual_index_id}")
     assert detail.status_code == 200
     assert detail.json()["detector"] == "ffmpeg_scdet"
 
-    scenes = client.get(
+    scenes = await client.get(
         f"/visual-indexes/{visual_index_id}/scenes", params={"offset": 1, "limit": 1}
     )
     assert scenes.status_code == 200
@@ -119,7 +119,7 @@ async def test_visual_index_api_creation_idempotency_and_pagination(
     assert scenes.json()["items"][0]["sequence"] == 2
     assert scenes.json()["items"][0]["metadata"] == {"cut": "gameplay"}
 
-    frames = client.get(
+    frames = await client.get(
         f"/visual-indexes/{visual_index_id}/frames", params={"offset": 1, "limit": 1}
     )
     assert frames.status_code == 200
@@ -130,15 +130,15 @@ async def test_visual_index_api_creation_idempotency_and_pagination(
     assert "scenes" not in ingestion["session"]
 
 
-def test_visual_index_requires_ready_session(client) -> None:
-    project = client.post("/projects", json={"name": "Witcher"}).json()
-    ingestion = client.post(
+async def test_visual_index_requires_ready_session(client) -> None:
+    project = (await client.post("/projects", json={"name": "Witcher"})).json()
+    ingestion = (await client.post(
         f"/projects/{project['id']}/sessions",
         data={"label": "001"},
         files={
             "video": ("001.mp4", b"fake-video", "video/mp4"),
             "notes": ("001.txt", b"note", "text/plain"),
         },
-    ).json()
-    response = client.post(f"/sessions/{ingestion['session']['id']}/visual-indexes", json={})
+    )).json()
+    response = await client.post(f"/sessions/{ingestion['session']['id']}/visual-indexes", json={})
     assert response.status_code == 409
