@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.services.alignment import AlignmentProcessor
-from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
-from app.services.embedding_provider import LiteLLMEmbeddingProvider
+from app.services.alignment_provider import NinerouterMultimodalAlignmentProvider
+from app.services.embedding_provider import NinerouterEmbeddingProvider
 from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import FFprobe
 from app.services.processing import InitialIndexProcessor
@@ -32,16 +32,8 @@ def build_default_registry() -> ProcessorRegistry:
     )
     scene_detector = FFmpegSceneDetector(settings.ffmpeg_binary)
     frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
-    embedding_provider = LiteLLMEmbeddingProvider(
-        settings.litellm_base_url,
-        settings.litellm_api_key,
-        settings.embedding_timeout_seconds,
-    )
-    alignment_provider = LiteLLMMultimodalAlignmentProvider(
-        settings.litellm_base_url,
-        settings.litellm_api_key,
-        settings.alignment_timeout_seconds,
-    )
+    embedding_provider = NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
+    alignment_provider = NinerouterMultimodalAlignmentProvider(settings.alignment_timeout_seconds)
     registry = ProcessorRegistry()
     registry.register(
         "initial_index",

@@ -17,7 +17,7 @@ from app.services.temporal_index import TemporalIndexProcessor
 
 
 class ApiEmbeddingProvider:
-    name = "litellm"
+    name = "ninerouter"
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -36,14 +36,16 @@ class ApiEmbeddingProvider:
 
 async def seed_completed_inputs(client, session_factory):
     project = (await client.post("/projects", json={"name": "Temporal API"})).json()
-    ingestion = (await client.post(
-        f"/projects/{project['id']}/sessions",
-        data={"label": "001"},
-        files={
-            "video": ("001.mp4", b"fake-video", "video/mp4"),
-            "notes": ("001.txt", b"note", "text/plain"),
-        },
-    )).json()
+    ingestion = (
+        await client.post(
+            f"/projects/{project['id']}/sessions",
+            data={"label": "001"},
+            files={
+                "video": ("001.mp4", b"fake-video", "video/mp4"),
+                "notes": ("001.txt", b"note", "text/plain"),
+            },
+        )
+    ).json()
     session_id = UUID(ingestion["session"]["id"])
     async with session_factory() as db:
         session = await db.get(MediaSession, session_id)

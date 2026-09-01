@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db as _get_db
 from app.services.embedding_provider import (
     EmbeddingProvider,
-    LiteLLMEmbeddingProvider,
+    NinerouterEmbeddingProvider,
 )
 from app.services.storage import LocalStorage, Storage
 
@@ -21,11 +21,7 @@ def get_storage() -> Storage:
 
 @lru_cache
 def get_embedding_provider() -> EmbeddingProvider:
-    return LiteLLMEmbeddingProvider(
-        settings.litellm_base_url,
-        settings.litellm_api_key,
-        settings.embedding_timeout_seconds,
-    )
+    return NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

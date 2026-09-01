@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual evaluation script for Media Search.
 
-This script allows testing Media Search with real data and optional LiteLLM provider.
+This script allows testing Media Search with real data through 9Router.
 
 Usage:
     python scripts/search_media.py --project-id <UUID> --query "Geralt learning Aard"
@@ -19,8 +19,8 @@ Options:
 
 Environment:
     DATABASE_URL: PostgreSQL async connection string
-    LITELLM_BASE_URL: LiteLLM proxy URL (optional, uses fake provider if not set)
-    LITELLM_API_KEY: LiteLLM API key (optional)
+    NINEROUTER_BASE_URL: 9Router service base URL (without /v1)
+    NINEROUTER_API_KEY: 9Router API key
 """
 
 import argparse
@@ -28,17 +28,17 @@ import asyncio
 import json
 import os
 import sys
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from app.core.config import settings
 from app.schemas.media_search import MediaSearchRequest
-from app.services.embedding_provider import FakeEmbeddingProvider, LiteLLMEmbeddingProvider
+from app.services.embedding_provider import NinerouterEmbeddingProvider
 from app.services.media_search import MediaSearchService
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def format_timestamp(seconds: float) -> str:
@@ -51,7 +51,7 @@ def format_timestamp(seconds: float) -> str:
 
 def print_text_results(response: Any) -> None:
     """Print results in human-readable text format."""
-    print(f"\nQuery: \"{response.query}\"")
+    print(f'\nQuery: "{response.query}"')
     print(f"Scope: {response.scope}")
     print(f"Strategy: {response.strategy}")
 
@@ -62,7 +62,9 @@ def print_text_results(response: Any) -> None:
     else:
         print(f"Session ID: {response.session_id}")
 
-    print(f"\nEmbedding: {response.embedding_provider}/{response.embedding_model} ({response.embedding_dimensions}d)")
+    print(
+        f"\nEmbedding: {response.embedding_provider}/{response.embedding_model} ({response.embedding_dimensions}d)"
+    )
 
     print(f"\n{'='*60}")
     print(f"RESULTS ({len(response.results)} total)")
@@ -74,7 +76,9 @@ def print_text_results(response: Any) -> None:
 
     for i, result in enumerate(response.results, 1):
         print(f"\n{i}. {result.session_label}")
-        print(f"   Range: {format_timestamp(result.start_seconds)} → {format_timestamp(result.end_seconds)}")
+        print(
+            f"   Range: {format_timestamp(result.start_seconds)} → {format_timestamp(result.end_seconds)}"
+        )
         print(f"   Duration: {result.duration_seconds:.1f}s")
         print(f"   Score: {result.score:.3f} (rank {result.rank})")
 
@@ -82,7 +86,7 @@ def print_text_results(response: Any) -> None:
             preview = result.transcript_preview[:100]
             if len(result.transcript_preview) > 100:
                 preview += "..."
-            print(f"   Preview: \"{preview}\"")
+            print(f'   Preview: "{preview}"')
 
         if result.matched_note_ids:
             print(f"   Matched notes: {len(result.matched_note_ids)}")
@@ -104,17 +108,8 @@ def print_json_results(response: Any) -> None:
 
 
 async def get_embedding_provider() -> Any:
-    """Get embedding provider based on configuration."""
-    if settings.litellm_base_url:
-        return LiteLLMEmbeddingProvider(
-            settings.litellm_base_url,
-            settings.litellm_api_key,
-            settings.embedding_timeout_seconds,
-        )
-    else:
-        from app.models import EMBEDDING_VECTOR_DIMENSIONS
-        print("WARNING: No LITELLM_BASE_URL configured, using fake embedding provider")
-        return FakeEmbeddingProvider(name="fake", dimensions=EMBEDDING_VECTOR_DIMENSIONS)
+    """Get the production embedding provider boundary."""
+    return NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
 
 
 async def search_session(

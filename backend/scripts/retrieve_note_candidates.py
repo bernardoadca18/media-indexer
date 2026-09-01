@@ -4,7 +4,7 @@ Run from backend:
     python scripts/retrieve_note_candidates.py \
         --temporal-index-id UUID --note-id UUID
 
-Requires DATABASE_URL plus valid LiteLLM embedding configuration.
+Requires DATABASE_URL plus valid 9Router embedding configuration.
 """
 
 import sys
@@ -23,7 +23,7 @@ from app.services.candidate_retrieval import (
     CandidateRetrievalConfig,
     CandidateRetrievalService,
 )
-from app.services.embedding_provider import LiteLLMEmbeddingProvider
+from app.services.embedding_provider import NinerouterEmbeddingProvider
 
 
 def format_timestamp(seconds: float) -> str:
@@ -34,11 +34,7 @@ def format_timestamp(seconds: float) -> str:
 
 
 async def run(temporal_index_id: UUID, note_id: UUID) -> None:
-    provider = LiteLLMEmbeddingProvider(
-        settings.litellm_base_url,
-        settings.litellm_api_key,
-        settings.embedding_timeout_seconds,
-    )
+    provider = NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
     config = CandidateRetrievalConfig(
         hit_limit=settings.candidate_hit_limit,
         max_candidates=settings.candidate_max_results,

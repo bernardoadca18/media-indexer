@@ -21,6 +21,7 @@ from app.api.routers import (
 )
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.services.model_gateway import model_gateway
 from app.workers.runner import job_runner
 
 configure_logging(settings.log_level)
@@ -36,6 +37,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
         yield
         if enabled:
             await job_runner.stop()
+        await model_gateway.close()
 
     application = FastAPI(title="NeoVids Media Indexer", version="0.1.0", lifespan=lifespan)
     application.add_middleware(

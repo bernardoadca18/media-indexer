@@ -29,7 +29,7 @@
 - **Coverage**: Vector similarity search, cosine distance, embedding dimension validation
 
 ### 3. External Smoke Tests
-- **Status**: Not yet executed (requires LiteLLM credentials)
+- **Historical status**: Not executed at the time (the former gateway required credentials)
 - **Recommendation**: Execute separately with proper environment setup
 
 ---

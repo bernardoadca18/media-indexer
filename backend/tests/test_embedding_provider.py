@@ -6,34 +6,38 @@ import pytest
 from app.services.embedding_provider import (
     EmbeddingDimensionError,
     EmbeddingProviderError,
-    LiteLLMEmbeddingProvider,
+    NinerouterEmbeddingProvider,
     validate_embeddings,
 )
+from app.services.model_gateway import ModelGatewayClient
 
 
 class FakeAsyncClient:
     response: httpx.Response
     request: dict[str, object]
-    timeout: float
 
-    def __init__(self, *, timeout: float):
-        type(self).timeout = timeout
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, traceback):
-        return None
-
-    async def post(self, url, *, headers, json):
-        type(self).request = {"url": url, "headers": headers, "json": json}
+    async def post(self, url, *, headers, json, **kwargs):
+        type(self).request = {
+            "url": url,
+            "headers": headers,
+            "json": json,
+            "timeout": kwargs["timeout"],
+        }
         return type(self).response
 
 
-async def test_litellm_provider_batches_openai_compatible_request_and_orders_response(
-    monkeypatch,
-) -> None:
-    request = httpx.Request("POST", "http://litellm.test/v1/embeddings")
+def gateway(api_key: str) -> ModelGatewayClient:
+    return ModelGatewayClient(
+        base_url="http://9router.test",
+        api_key=api_key,
+        connect_timeout_seconds=3.0,
+        max_attempts=1,
+        client=FakeAsyncClient(),  # type: ignore[arg-type]
+    )
+
+
+async def test_ninerouter_provider_batches_request_and_orders_response() -> None:
+    request = httpx.Request("POST", "http://9router.test/v1/embeddings")
     FakeAsyncClient.response = httpx.Response(
         200,
         request=request,
@@ -44,8 +48,7 @@ async def test_litellm_provider_batches_openai_compatible_request_and_orders_res
             ]
         },
     )
-    monkeypatch.setattr("app.services.embedding_provider.httpx.AsyncClient", FakeAsyncClient)
-    provider = LiteLLMEmbeddingProvider("http://litellm.test/", "secret", 12.5)
+    provider = NinerouterEmbeddingProvider(12.5, gateway("secret"))
 
     vectors = await provider.embed(
         ["protect laboratory", "use Aard"],
@@ -54,24 +57,22 @@ async def test_litellm_provider_batches_openai_compatible_request_and_orders_res
     )
 
     assert vectors == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-    assert FakeAsyncClient.timeout == 12.5
-    assert FakeAsyncClient.request == {
-        "url": "http://litellm.test/v1/embeddings",
-        "headers": {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer secret",
-        },
-        "json": {
-            "model": "embedding-alias",
-            "input": ["protect laboratory", "use Aard"],
-        },
+    assert FakeAsyncClient.request["url"] == "http://9router.test/v1/embeddings"
+    assert FakeAsyncClient.request["headers"] == {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer secret",
     }
+    assert FakeAsyncClient.request["json"] == {
+        "model": "embedding-alias",
+        "input": ["protect laboratory", "use Aard"],
+        "dimensions": 3,
+    }
+    assert isinstance(FakeAsyncClient.request["timeout"], httpx.Timeout)
 
 
-async def test_litellm_provider_maps_http_and_dimension_errors(monkeypatch) -> None:
-    request = httpx.Request("POST", "http://litellm.test/v1/embeddings")
-    monkeypatch.setattr("app.services.embedding_provider.httpx.AsyncClient", FakeAsyncClient)
-    provider = LiteLLMEmbeddingProvider("http://litellm.test", "", 5.0)
+async def test_ninerouter_provider_maps_http_and_dimension_errors() -> None:
+    request = httpx.Request("POST", "http://9router.test/v1/embeddings")
+    provider = NinerouterEmbeddingProvider(5.0, gateway(""))
 
     FakeAsyncClient.response = httpx.Response(503, request=request)
     with pytest.raises(EmbeddingProviderError, match="HTTP 503"):

@@ -3,7 +3,7 @@ from typing import Any
 from app.services.alignment_provider import AlignmentProviderRequest, AlignmentProviderResult
 
 ALIGNMENT_STRATEGY = "multimodal_alignment_v1"
-ALIGNMENT_PROMPT_VERSION = "alignment_prompt_v1"
+ALIGNMENT_PROMPT_VERSION = "alignment_prompt_v2"
 
 SYSTEM_INSTRUCTION = """You validate a small candidate window against one source observation.
 The candidate is only a retrieval hypothesis and may be wrong. matched=false is normal.
@@ -12,6 +12,9 @@ For subjective observations, locate the experience that plausibly produced the o
 without claiming the opinion is an objective visual fact.
 When matched=true, return the smallest defensible interval inside the candidate.
 When matched=false, timestamps must be null. Confidence describes confidence in either result.
+Use exactly these top-level field names: matched, start_seconds, end_seconds, confidence,
+anchors, reasoning_summary. Never shorten start_seconds/end_seconds to start/end.
+Every anchor must use exactly timestamp_seconds and description.
 Return only the requested structured JSON and never chain-of-thought."""
 
 

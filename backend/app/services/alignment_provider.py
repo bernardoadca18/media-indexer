@@ -5,8 +5,13 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
-import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.model_gateway import (
+    ModelGatewayClient,
+    ModelGatewayTransportError,
+    model_gateway,
+)
 
 
 class AlignmentProviderError(RuntimeError):
@@ -119,13 +124,16 @@ def validate_result_bounds(
             )
 
 
-class LiteLLMMultimodalAlignmentProvider:
-    name = "litellm"
+class NinerouterMultimodalAlignmentProvider:
+    name = "ninerouter"
 
-    def __init__(self, base_url: str, api_key: str, timeout_seconds: float):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
+    def __init__(
+        self,
+        timeout_seconds: float,
+        gateway: ModelGatewayClient = model_gateway,
+    ):
         self.timeout_seconds = timeout_seconds
+        self.gateway = gateway
 
     async def align(
         self,
@@ -158,42 +166,33 @@ class LiteLLMMultimodalAlignmentProvider:
                 }
             )
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
         started = time.monotonic()
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(
-                    f"{self.base_url}/v1/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": SYSTEM_INSTRUCTION},
-                            {"role": "user", "content": content},
-                        ],
-                        "temperature": 0,
-                        "response_format": response_format(),
-                    },
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
+            response = await self.gateway.post(
+                "/v1/chat/completions",
+                payload={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": content},
+                    ],
+                    "temperature": 0,
+                    "stream": False,
+                    "response_format": response_format(),
+                },
+                read_timeout_seconds=self.timeout_seconds,
+            )
+        except ModelGatewayTransportError as exc:
             raise AlignmentProviderError(
-                f"LiteLLM alignment request failed with HTTP {status}",
-                transient=status == 429 or status >= 500,
-            ) from exc
-        except httpx.TimeoutException as exc:
-            raise AlignmentProviderError(
-                "LiteLLM alignment request timed out",
+                "9Router alignment request failed after bounded transport retries",
                 transient=True,
             ) from exc
-        except httpx.RequestError as exc:
+        if response.status_code >= 400:
+            status = response.status_code
             raise AlignmentProviderError(
-                "LiteLLM alignment request failed",
-                transient=True,
-            ) from exc
+                f"9Router alignment request failed with HTTP {status}",
+                transient=status in {408, 429} or status >= 500,
+            )
         latency = time.monotonic() - started
 
         try:
@@ -204,11 +203,13 @@ class LiteLLMMultimodalAlignmentProvider:
             result = AlignmentProviderResult.model_validate(json.loads(raw_content))
             usage = payload.get("usage")
             provider_metadata = {
-                key: payload[key] for key in ("id", "model", "system_fingerprint") if key in payload
+                key: payload[key]
+                for key in ("id", "model", "provider", "system_fingerprint")
+                if key in payload
             }
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
             raise InvalidAlignmentOutputError(
-                "LiteLLM returned an invalid structured alignment response"
+                "9Router returned an invalid structured alignment response"
             ) from exc
         validate_result_bounds(result, request)
         return AlignmentProviderResponse(

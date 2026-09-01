@@ -108,7 +108,7 @@ owns points at the exact media end. Silent segments keep empty text and
 embedding_status=not_applicable.
 
 EmbeddingProvider is intentionally embedding-specific. The production adapter
-sends arrays of non-empty search_text values to LiteLLM's OpenAI-compatible
+sends arrays of non-empty search_text values to 9Router's OpenAI-compatible
 /v1/embeddings endpoint. Provider responses are reordered by input index and
 validated for count, finite values and exactly 1024 dimensions before
 persistence. The configured dimension is also checked against the schema
@@ -181,7 +181,7 @@ sampling resolution. The subject selects the best matched result
 deterministically by confidence, then retrieval rank and retrieval score.
 
 MultimodalAlignmentProvider is deliberately separate from embeddings and generic
-chat. LiteLLMMultimodalAlignmentProvider targets the existing OpenAI-compatible
+chat. NinerouterMultimodalAlignmentProvider targets the OpenAI-compatible
 /v1/chat/completions gateway and knows no underlying Gemini/cloud/local
 implementation. It sends temperature zero plus a strict JSON Schema. The shared
 prompt explicitly treats each candidate as a hypothesis, permits unmatched, and
@@ -203,7 +203,7 @@ Dense evidence JPEGs are managed DerivedAssets under:
 
 Their checksums, dimensions, source window, candidate ID, pass and sampling
 resolution are persisted. Binary bytes and base64 are never stored in database
-JSON or returned by APIs; data URLs exist only in the outbound LiteLLM request.
+JSON or returned by APIs; data URLs exist only in the outbound 9Router request.
 
 matched and unmatched are both valid provider outcomes. unmatched requires null
 timestamps. no_candidates is a valid subject outcome. Provider, timeout,
@@ -281,7 +281,7 @@ labels and transcript previews provide context without requiring separate API ca
 No multimodal alignment is triggered; the API returns deterministic retrieval results
 only.
 
-EmbeddingProvider follows the same pattern as other stages. LiteLLMEmbeddingProvider
+EmbeddingProvider follows the same pattern as other stages. NinerouterEmbeddingProvider
 targets the OpenAI-compatible /v1/embeddings endpoint. FakeEmbeddingProvider enables
 deterministic testing without external dependencies. The service validates provider
 responses for dimension count and finite values before search.

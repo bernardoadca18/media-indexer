@@ -2,7 +2,11 @@ import math
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-import httpx
+from app.services.model_gateway import (
+    ModelGatewayClient,
+    ModelGatewayTransportError,
+    model_gateway,
+)
 
 
 class EmbeddingProviderError(RuntimeError):
@@ -90,18 +94,16 @@ class FakeEmbeddingProvider:
         return [float(index)] + [0.0] * (self.dimensions - 1)
 
 
-class LiteLLMEmbeddingProvider:
-    name = "litellm"
+class NinerouterEmbeddingProvider:
+    name = "ninerouter"
 
     def __init__(
         self,
-        base_url: str,
-        api_key: str,
         timeout_seconds: float,
+        gateway: ModelGatewayClient = model_gateway,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.gateway = gateway
 
     async def embed(
         self,
@@ -112,23 +114,24 @@ class LiteLLMEmbeddingProvider:
     ) -> list[list[float]]:
         if not texts:
             return []
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(
-                    f"{self.base_url}/v1/embeddings",
-                    headers=headers,
-                    json={"model": model, "input": list(texts)},
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
+            response = await self.gateway.post(
+                "/v1/embeddings",
+                payload={
+                    "model": model,
+                    "input": list(texts),
+                    "dimensions": expected_dimensions,
+                },
+                read_timeout_seconds=self.timeout_seconds,
+            )
+        except ModelGatewayTransportError as exc:
             raise EmbeddingProviderError(
-                f"LiteLLM embeddings request failed with HTTP {exc.response.status_code}"
+                "9Router embeddings request failed after bounded transport retries"
             ) from exc
-        except httpx.RequestError as exc:
-            raise EmbeddingProviderError("LiteLLM embeddings request failed") from exc
+        if response.status_code >= 400:
+            raise EmbeddingProviderError(
+                f"9Router embeddings request failed with HTTP {response.status_code}"
+            )
 
         try:
             payload: Any = response.json()
@@ -136,9 +139,9 @@ class LiteLLMEmbeddingProvider:
             ordered = sorted(items, key=lambda item: int(item["index"]))
             vectors = [item["embedding"] for item in ordered]
         except (KeyError, TypeError, ValueError) as exc:
-            raise EmbeddingProviderError("LiteLLM returned an invalid embeddings response") from exc
+            raise EmbeddingProviderError("9Router returned an invalid embeddings response") from exc
         if not all(isinstance(vector, list) for vector in vectors):
-            raise EmbeddingProviderError("LiteLLM returned an invalid embedding vector")
+            raise EmbeddingProviderError("9Router returned an invalid embedding vector")
         return validate_embeddings(
             vectors,
             expected_count=len(texts),

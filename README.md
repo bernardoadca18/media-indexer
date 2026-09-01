@@ -48,7 +48,7 @@ POSTGRES_TEST_URL=postgresql+asyncpg://media_indexer:media_indexer@localhost:543
   pytest --postgres -m postgres
 ```
 
-Testes `external` (modelos, LiteLLM, FFmpeg/credenciais quando aplicável) exigem `--external` e
+Testes `external` (modelos, 9Router, FFmpeg/credenciais quando aplicável) exigem `--external` e
 permanecem opt-in. Não
 converta testes pgvector em SQLite: a separação preserva a semântica real sem tornar toda a suíte
 unitária dependente de PostgreSQL.
@@ -158,16 +158,16 @@ Intervals use [start,end), except that a point exactly at media end belongs to
 the final segment.
 
 Non-empty search_text values are embedded in batches through the
-OpenAI-compatible LiteLLM /v1/embeddings endpoint. The media-indexer only knows
-the configured LiteLLM alias. Vectors are stored as pgvector vector(1024);
+OpenAI-compatible 9Router /v1/embeddings endpoint. The media-indexer only knows
+the configured semantic alias. Vectors are stored as pgvector vector(1024);
 EMBEDDING_DIMENSIONS is validated against the schema and a dimension change
 requires a migration. Search uses exact cosine distance scoped to one
 TemporalIndex and returns score = 1 - cosine_distance, so larger is more
 similar. No HNSW/IVFFlat index is created at the current expected scale.
 
-    LITELLM_BASE_URL=http://host.docker.internal:4000
-    LITELLM_API_KEY=
-    EMBEDDING_MODEL=mxbai-large
+    NINEROUTER_BASE_URL=http://9router:20128
+    NINEROUTER_API_KEY=
+    EMBEDDING_MODEL=neovids-embedding
     EMBEDDING_DIMENSIONS=1024
     EMBEDDING_TIMEOUT_SECONDS=60
     EMBEDDING_BATCH_SIZE=32
@@ -177,9 +177,9 @@ similar. No HNSW/IVFFlat index is created at the current expected scale.
 
 Docker Compose uses pgvector/pgvector:pg16, preserving PostgreSQL major 16 and
 the existing named data volume. Migration 0004 enables the extension
-automatically. The API service maps host.docker.internal to host-gateway so its
-default LiteLLM URL also resolves on Linux Docker; override LITELLM_BASE_URL
-when the proxy is on another network.
+automatically. The API service joins the external `neovids` Docker network and
+resolves `9router` by service DNS. `NINEROUTER_BASE_URL` is always a service base
+URL without `/v1`; endpoint suffixes are owned by the client.
 
 Equivalent prerequisite/configuration/model requests reuse one TemporalIndex
 and job. A retry removes and rebuilds only that index's TemporalSegments,
@@ -262,7 +262,7 @@ CandidateAlignment retains retrieval rank, matched/unmatched/failed/not_evaluate
 state, optional interval, confidence, bounded anchors, concise evidence summary,
 provider metadata, usage and measured timestamp resolution.
 
-The provider port is multimodal-alignment-specific. Its LiteLLM adapter uses the
+The provider port is multimodal-alignment-specific. Its 9Router adapter uses the
 OpenAI-compatible /v1/chat/completions endpoint with JSON Schema output, text
 evidence and timestamp-labelled JPEGs. Source storage URIs are resolved before
 the call; base64 data URLs exist only inside the HTTP request and are never
@@ -489,9 +489,9 @@ The first verifies the vector extension and exact cosine ordering. The second
 builds a small TemporalIndex with a deterministic fake provider, persists
 vector(1024) values and searches them through the production repository.
 
-To exercise the real LiteLLM alias without hardcoded credentials:
+To exercise the real 9Router alias without hardcoded credentials:
 
-    LITELLM_BASE_URL=... LITELLM_API_KEY=... \
+    NINEROUTER_BASE_URL=... NINEROUTER_API_KEY=... \
       python scripts/smoke_embedding.py --text "Geralt learns Aard"
 
 
@@ -509,8 +509,8 @@ To evaluate one real gameplay note against an existing completed index:
       --temporal-index-id UUID --note-id UUID
 
 The command prints ranked HH:MM:SS windows and scores. Real embedding commands
-keep normal LiteLLM authentication; the current environment's prior 401 means a
-valid LITELLM_API_KEY is required for real evaluation. Tests and the
+keep normal 9Router authentication; a valid `NINEROUTER_API_KEY` is required
+for real evaluation. Tests and the
 deterministic smoke use a fake EmbeddingProvider and require no credentials.
 
 
@@ -526,8 +526,8 @@ For a readable full note-run evaluation:
     python scripts/evaluate_note_alignment.py --retrieval-run-id UUID
 
 Both commands use persisted source media, real FFmpeg frame extraction and the
-configured LiteLLM chat model alias. They require a valid LITELLM_API_KEY; the
-known credential-less environment returns HTTP 401 and is not bypassed.
+configured 9Router vision combo. They require a valid `NINEROUTER_API_KEY`;
+authentication failures are terminal and are not bypassed.
 Normal pytest uses FakeAlignmentProvider/FakeFrameExtractor and performs no
 network, CUDA, model download or real-video processing.
 
@@ -558,5 +558,5 @@ Or session-specific:
         --session-id UUID \
         --query "combat against drowners"
 
-The evaluation script uses LiteLLM when configured, or falls back to a fake
-provider for testing.
+The evaluation script uses the configured 9Router embedding alias. Deterministic
+tests inject a fake provider explicitly; production commands do not fail over locally.

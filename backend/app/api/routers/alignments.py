@@ -22,7 +22,7 @@ from app.services.alignment import (
     AlignmentRequest,
     AlignmentService,
 )
-from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
+from app.services.alignment_provider import NinerouterMultimodalAlignmentProvider
 from app.workers.runner import job_runner
 
 router = APIRouter(tags=["multimodal-alignment"])
@@ -72,7 +72,7 @@ async def create_alignment(
     try:
         result = await AlignmentService(
             db,
-            provider_name=LiteLLMMultimodalAlignmentProvider.name,
+            provider_name=NinerouterMultimodalAlignmentProvider.name,
             max_attempts=settings.job_max_attempts,
         ).ensure(retrieval_run_id, request)
     except LookupError as exc:

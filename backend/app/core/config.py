@@ -7,7 +7,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        protected_namespaces=("settings_",),
+    )
 
     database_url: str = (
         "postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer"
@@ -38,9 +42,11 @@ class Settings(BaseSettings):
     representative_frame_jpeg_quality: int = 85
     representative_frame_dedup_tolerance_seconds: float = 0.5
 
-    litellm_base_url: str = "http://localhost:4000"
-    litellm_api_key: str = ""
-    embedding_model: str = "mxbai-large"
+    ninerouter_base_url: str = "http://9router:20128"
+    ninerouter_api_key: str = ""
+    model_gateway_connect_timeout_seconds: float = 10.0
+    model_gateway_max_attempts: int = 3
+    embedding_model: str = "neovids-embedding"
     embedding_dimensions: int = 1024
     embedding_timeout_seconds: float = 60.0
     embedding_batch_size: int = 32
@@ -55,7 +61,7 @@ class Settings(BaseSettings):
     candidate_context_after_seconds: float = 20.0
     candidate_max_duration_seconds: float = 120.0
 
-    alignment_model: str = "alignment-flash"
+    alignment_model: str = "neovids-vision"
     alignment_timeout_seconds: float = 120.0
     alignment_frame_interval_seconds: float = 2.0
     alignment_max_frames: int = 60
@@ -80,6 +86,14 @@ class Settings(BaseSettings):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("ninerouter_base_url")
+    @classmethod
+    def validate_ninerouter_base_url(cls, value: str) -> str:
+        normalized = value.rstrip("/")
+        if normalized.casefold().endswith("/v1"):
+            raise ValueError("NINEROUTER_BASE_URL must not include the /v1 suffix")
+        return normalized
 
 
 @lru_cache

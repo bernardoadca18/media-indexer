@@ -9,27 +9,33 @@ from app.services.alignment_provider import (
     AlignmentProviderError,
     AlignmentProviderRequest,
     InvalidAlignmentOutputError,
-    LiteLLMMultimodalAlignmentProvider,
+    NinerouterMultimodalAlignmentProvider,
 )
+from app.services.model_gateway import ModelGatewayClient
 
 
 class FakeAsyncClient:
     response: httpx.Response
     request: dict[str, object]
-    timeout: float
 
-    def __init__(self, *, timeout: float):
-        type(self).timeout = timeout
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, traceback):
-        return None
-
-    async def post(self, url, *, headers, json):
-        type(self).request = {"url": url, "headers": headers, "json": json}
+    async def post(self, url, *, headers, json, **kwargs):
+        type(self).request = {
+            "url": url,
+            "headers": headers,
+            "json": json,
+            "timeout": kwargs["timeout"],
+        }
         return type(self).response
+
+
+def gateway(api_key: str) -> ModelGatewayClient:
+    return ModelGatewayClient(
+        base_url="http://9router.test",
+        api_key=api_key,
+        connect_timeout_seconds=3.0,
+        max_attempts=1,
+        client=FakeAsyncClient(),  # type: ignore[arg-type]
+    )
 
 
 def provider_request() -> AlignmentProviderRequest:
@@ -57,10 +63,20 @@ def provider_request() -> AlignmentProviderRequest:
     )
 
 
-async def test_litellm_alignment_provider_sends_structured_multimodal_contract(
-    monkeypatch,
-) -> None:
-    request = httpx.Request("POST", "http://litellm.test/v1/chat/completions")
+def test_alignment_prompt_names_host_owned_timestamp_fields() -> None:
+    from app.services.alignment_prompt import (
+        ALIGNMENT_PROMPT_VERSION,
+        SYSTEM_INSTRUCTION,
+    )
+
+    assert ALIGNMENT_PROMPT_VERSION == "alignment_prompt_v2"
+    assert "start_seconds" in SYSTEM_INSTRUCTION
+    assert "end_seconds" in SYSTEM_INSTRUCTION
+    assert "Never shorten" in SYSTEM_INSTRUCTION
+
+
+async def test_ninerouter_alignment_provider_sends_structured_multimodal_contract() -> None:
+    request = httpx.Request("POST", "http://9router.test/v1/chat/completions")
     FakeAsyncClient.response = httpx.Response(
         200,
         request=request,
@@ -91,15 +107,7 @@ async def test_litellm_alignment_provider_sends_structured_multimodal_contract(
             "usage": {"prompt_tokens": 20, "completion_tokens": 10},
         },
     )
-    monkeypatch.setattr(
-        "app.services.alignment_provider.httpx.AsyncClient",
-        FakeAsyncClient,
-    )
-    provider = LiteLLMMultimodalAlignmentProvider(
-        "http://litellm.test/",
-        "secret",
-        12.5,
-    )
+    provider = NinerouterMultimodalAlignmentProvider(12.5, gateway("secret"))
 
     response = await provider.align(provider_request(), model="alignment-alias")
 
@@ -113,13 +121,13 @@ async def test_litellm_alignment_provider_sends_structured_multimodal_contract(
         "prompt_tokens": 20,
         "completion_tokens": 10,
     }
-    assert FakeAsyncClient.timeout == 12.5
     sent = FakeAsyncClient.request
-    assert sent["url"] == "http://litellm.test/v1/chat/completions"
+    assert sent["url"] == "http://9router.test/v1/chat/completions"
     assert sent["headers"]["Authorization"] == "Bearer secret"
     body = sent["json"]
     assert body["model"] == "alignment-alias"
     assert body["temperature"] == 0
+    assert body["stream"] is False
     assert body["response_format"]["type"] == "json_schema"
     user_content = body["messages"][1]["content"]
     assert any(item["type"] == "image_url" for item in user_content)
@@ -128,16 +136,10 @@ async def test_litellm_alignment_provider_sends_structured_multimodal_contract(
     assert "local://frame.jpg" not in json.dumps(body)
 
 
-async def test_litellm_alignment_provider_maps_http_failure_without_retry(
-    monkeypatch,
-) -> None:
-    request = httpx.Request("POST", "http://litellm.test/v1/chat/completions")
+async def test_ninerouter_alignment_provider_maps_http_failure_after_bound() -> None:
+    request = httpx.Request("POST", "http://9router.test/v1/chat/completions")
     FakeAsyncClient.response = httpx.Response(503, request=request)
-    monkeypatch.setattr(
-        "app.services.alignment_provider.httpx.AsyncClient",
-        FakeAsyncClient,
-    )
-    provider = LiteLLMMultimodalAlignmentProvider("http://litellm.test", "", 5.0)
+    provider = NinerouterMultimodalAlignmentProvider(5.0, gateway(""))
 
     with pytest.raises(AlignmentProviderError, match="HTTP 503") as raised:
         await provider.align(provider_request(), model="alignment-alias")
@@ -146,15 +148,9 @@ async def test_litellm_alignment_provider_maps_http_failure_without_retry(
     assert "Authorization" not in FakeAsyncClient.request["headers"]
 
 
-async def test_litellm_alignment_provider_rejects_invalid_or_out_of_bounds_output(
-    monkeypatch,
-) -> None:
-    request = httpx.Request("POST", "http://litellm.test/v1/chat/completions")
-    monkeypatch.setattr(
-        "app.services.alignment_provider.httpx.AsyncClient",
-        FakeAsyncClient,
-    )
-    provider = LiteLLMMultimodalAlignmentProvider("http://litellm.test", "", 5.0)
+async def test_ninerouter_alignment_rejects_invalid_or_out_of_bounds_output() -> None:
+    request = httpx.Request("POST", "http://9router.test/v1/chat/completions")
+    provider = NinerouterMultimodalAlignmentProvider(5.0, gateway(""))
 
     FakeAsyncClient.response = httpx.Response(
         200,

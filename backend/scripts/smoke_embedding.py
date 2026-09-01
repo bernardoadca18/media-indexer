@@ -1,4 +1,4 @@
-"""Smoke-test the configured LiteLLM embedding alias.
+"""Smoke-test the configured 9Router embedding alias.
 
 Run from backend:
     python scripts/smoke_embedding.py --text "Geralt learns Aard"
@@ -13,15 +13,11 @@ import argparse
 import asyncio
 
 from app.core.config import settings
-from app.services.embedding_provider import LiteLLMEmbeddingProvider
+from app.services.embedding_provider import NinerouterEmbeddingProvider
 
 
 async def run(text: str) -> None:
-    provider = LiteLLMEmbeddingProvider(
-        settings.litellm_base_url,
-        settings.litellm_api_key,
-        settings.embedding_timeout_seconds,
-    )
+    provider = NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
     vectors = await provider.embed(
         [text],
         model=settings.embedding_model,

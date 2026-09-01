@@ -28,8 +28,8 @@ Searchable temporal indexing is now an implemented roadmap phase. Keep
 TemporalIndex as an independent job over explicit completed Transcription and
 VisualIndex inputs. TemporalSegments must cover silence without invented text,
 retain normalized evidence links, and embed only non-empty search_text through
-the LiteLLM-compatible EmbeddingProvider. Tests use fake providers; real
-LiteLLM and pgvector checks remain explicit smokes.
+the 9Router-compatible EmbeddingProvider. Tests use fake providers; real
+9Router and pgvector checks remain explicit smokes.
 
 Candidate Retrieval is now implemented as a synchronous persisted stage over a
 completed TemporalIndex. Keep RetrievalRun strategy/configuration identity,
@@ -42,9 +42,9 @@ independent durable stage. Keep AlignmentRun/AlignmentSubject/CandidateAlignment
 provenance, explicit matched/unmatched/failed/not_evaluated semantics, bounded
 candidate-only frame sampling and versioned prompts. Unmatched/no_candidates are
 valid completed outcomes. Tests use fake providers and frame extractors; real
-LiteLLM/FFmpeg evaluation is an explicit smoke requiring credentials.
+9Router/FFmpeg evaluation is an explicit smoke requiring credentials.
 
-LiteLLM is only a provider-neutral OpenAI-compatible gateway here. Never hardwire
+9Router is the provider-neutral OpenAI-compatible gateway here. Never hardwire
 Gemini or another underlying model, persist base64, expose host paths, request
 hidden chain-of-thought, or convert provider failures into unmatched. Provider
 adapters do not retry; bounded ProcessingJob attempts are the single retry layer.
@@ -60,7 +60,7 @@ Project/Session Media Search is now implemented as a synchronous public API.
 Keep TemporalIndex resolution explicit with documented conflict handling. Embed
 the query once per compatibility group, not per session. Reuse CandidateRetriever
 logic without duplicating code. No automatic multimodal alignment. Tests use fake
-embeddings; real LiteLLM evaluation is an explicit smoke.
+embeddings; real 9Router evaluation is an explicit smoke.
 
 Stage 16 source materialization is supported through read-only MediaAsset metadata/content routes.
 Keep lookup restricted to logical IDs and managed storage resolution. Metadata must not expose

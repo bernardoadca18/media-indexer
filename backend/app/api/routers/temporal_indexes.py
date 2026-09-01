@@ -59,7 +59,7 @@ async def create_temporal_index(
             if payload.max_duration_seconds is None
             else payload.max_duration_seconds
         ),
-        embedding_provider="litellm",
+        embedding_provider="ninerouter",
         embedding_model=settings.embedding_model,
         embedding_dimensions=settings.embedding_dimensions,
     )

@@ -29,8 +29,6 @@ services:
     env_file:
       - path: .env
         required: false
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://media_indexer:media_indexer@db:5432/media_indexer}
       STORAGE_ROOT: ${STORAGE_ROOT:-/data/storage}
@@ -58,9 +56,11 @@ services:
       REPRESENTATIVE_FRAME_FORMAT: ${REPRESENTATIVE_FRAME_FORMAT:-jpeg}
       REPRESENTATIVE_FRAME_JPEG_QUALITY: ${REPRESENTATIVE_FRAME_JPEG_QUALITY:-85}
       REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS: ${REPRESENTATIVE_FRAME_DEDUP_TOLERANCE_SECONDS:-0.5}
-      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://host.docker.internal:4000}
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-mxbai-large}
+      NINEROUTER_BASE_URL: ${NINEROUTER_BASE_URL:-http://9router:20128}
+      NINEROUTER_API_KEY: ${NINEROUTER_API_KEY:-}
+      MODEL_GATEWAY_CONNECT_TIMEOUT_SECONDS: ${MODEL_GATEWAY_CONNECT_TIMEOUT_SECONDS:-10}
+      MODEL_GATEWAY_MAX_ATTEMPTS: ${MODEL_GATEWAY_MAX_ATTEMPTS:-3}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-neovids-embedding}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
       EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-60}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
@@ -74,7 +74,7 @@ services:
       CANDIDATE_CONTEXT_BEFORE_SECONDS: ${CANDIDATE_CONTEXT_BEFORE_SECONDS:-15}
       CANDIDATE_CONTEXT_AFTER_SECONDS: ${CANDIDATE_CONTEXT_AFTER_SECONDS:-20}
       CANDIDATE_MAX_DURATION_SECONDS: ${CANDIDATE_MAX_DURATION_SECONDS:-120}
-      ALIGNMENT_MODEL: ${ALIGNMENT_MODEL:-alignment-flash}
+      ALIGNMENT_MODEL: ${ALIGNMENT_MODEL:-neovids-vision}
       ALIGNMENT_TIMEOUT_SECONDS: ${ALIGNMENT_TIMEOUT_SECONDS:-120}
       ALIGNMENT_FRAME_INTERVAL_SECONDS: ${ALIGNMENT_FRAME_INTERVAL_SECONDS:-2}
       ALIGNMENT_MAX_FRAMES: ${ALIGNMENT_MAX_FRAMES:-60}
@@ -95,6 +95,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      default: {}
+      neovids:
+        aliases:
+          - media-indexer
     healthcheck:
       test:
         [
@@ -110,3 +115,8 @@ services:
 volumes:
   media-indexer-db-data:
   media-indexer-model-cache:
+
+networks:
+  neovids:
+    external: true
+    name: neovids

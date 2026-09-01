@@ -5,7 +5,7 @@ Run from backend:
         --retrieval-run-id UUID [--candidate-id UUID ...]
 
 Requires PostgreSQL, FFmpeg, source media under STORAGE_ROOT, and a valid
-LiteLLM credential/model alias. No media or image bytes are persisted in JSON.
+9Router API key/combo. No media or image bytes are persisted in JSON.
 """
 
 import sys
@@ -26,7 +26,7 @@ from app.services.alignment import (
     AlignmentRequest,
     AlignmentService,
 )
-from app.services.alignment_provider import LiteLLMMultimodalAlignmentProvider
+from app.services.alignment_provider import NinerouterMultimodalAlignmentProvider
 from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.storage import LocalStorage
 from app.services.visual_tools import FFmpegFrameExtractor
@@ -52,11 +52,7 @@ async def execute(
     retrieval_run_id: UUID,
     candidate_ids: tuple[UUID, ...] | None,
 ) -> UUID:
-    provider = LiteLLMMultimodalAlignmentProvider(
-        settings.litellm_base_url,
-        settings.litellm_api_key,
-        settings.alignment_timeout_seconds,
-    )
+    provider = NinerouterMultimodalAlignmentProvider(settings.alignment_timeout_seconds)
     storage = LocalStorage(settings.storage_root)
     extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
     async with AsyncSessionLocal() as db:
