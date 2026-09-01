@@ -157,17 +157,15 @@ the contributing transcript segments, scenes and representative frames.
 Intervals use [start,end), except that a point exactly at media end belongs to
 the final segment.
 
-Non-empty search_text values are embedded in batches through the
-OpenAI-compatible 9Router /v1/embeddings endpoint. The media-indexer only knows
-the configured semantic alias. Vectors are stored as pgvector vector(1024);
+Non-empty search_text values are embedded in batches directly through Ollama's
+`/api/embed` endpoint. Vectors are stored as pgvector vector(1024);
 EMBEDDING_DIMENSIONS is validated against the schema and a dimension change
 requires a migration. Search uses exact cosine distance scoped to one
 TemporalIndex and returns score = 1 - cosine_distance, so larger is more
 similar. No HNSW/IVFFlat index is created at the current expected scale.
 
-    NINEROUTER_BASE_URL=http://9router:20128
-    NINEROUTER_API_KEY=
-    EMBEDDING_MODEL=neovids-embedding
+    OLLAMA_BASE_URL=http://host.docker.internal:11434
+    EMBEDDING_MODEL=mxbai-embed-large:latest
     EMBEDDING_DIMENSIONS=1024
     EMBEDDING_TIMEOUT_SECONDS=60
     EMBEDDING_BATCH_SIZE=32
@@ -178,8 +176,11 @@ similar. No HNSW/IVFFlat index is created at the current expected scale.
 Docker Compose uses pgvector/pgvector:pg16, preserving PostgreSQL major 16 and
 the existing named data volume. Migration 0004 enables the extension
 automatically. The API service joins the external `neovids` Docker network and
-resolves `9router` by service DNS. `NINEROUTER_BASE_URL` is always a service base
-URL without `/v1`; endpoint suffixes are owned by the client.
+reaches host Ollama through the stable `host.docker.internal:host-gateway`
+mapping on Linux. Multimodal alignment still resolves `9router` by service DNS.
+New indexes persist `embedding_provider=ollama`, the exact model tag and 1024
+dimensions. Historical index identities are not rewritten or assumed compatible
+merely because they share the same vector size.
 
 Equivalent prerequisite/configuration/model requests reuse one TemporalIndex
 and job. A retry removes and rebuilds only that index's TemporalSegments,
@@ -558,5 +559,5 @@ Or session-specific:
         --session-id UUID \
         --query "combat against drowners"
 
-The evaluation script uses the configured 9Router embedding alias. Deterministic
+The evaluation script uses the configured direct Ollama model. Deterministic
 tests inject a fake provider explicitly; production commands do not fail over locally.

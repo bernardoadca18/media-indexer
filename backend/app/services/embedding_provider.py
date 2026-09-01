@@ -1,15 +1,19 @@
+import asyncio
+import json
 import math
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from app.services.model_gateway import (
-    ModelGatewayClient,
-    ModelGatewayTransportError,
-    model_gateway,
-)
+import httpx
+
+from app.core.config import settings
 
 
 class EmbeddingProviderError(RuntimeError):
+    pass
+
+
+class EmbeddingTransportError(EmbeddingProviderError):
     pass
 
 
@@ -94,16 +98,50 @@ class FakeEmbeddingProvider:
         return [float(index)] + [0.0] * (self.dimensions - 1)
 
 
-class NinerouterEmbeddingProvider:
-    name = "ninerouter"
+def is_retryable_status(status_code: int) -> bool:
+    return status_code in {408, 429} or 500 <= status_code <= 599
+
+
+class OllamaEmbeddingProvider:
+    """Pooled direct Ollama adapter; model fallback is deliberately absent."""
+
+    name = "ollama"
 
     def __init__(
         self,
+        base_url: str,
         timeout_seconds: float,
-        gateway: ModelGatewayClient = model_gateway,
-    ):
+        connect_timeout_seconds: float,
+        max_attempts: int,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.gateway = gateway
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.max_attempts = max_attempts
+        self._client = client
+        self._owns_client = client is None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=self.connect_timeout_seconds,
+                    read=self.timeout_seconds,
+                    write=30.0,
+                    pool=10.0,
+                ),
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                ),
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._owns_client and self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def embed(
         self,
@@ -112,38 +150,62 @@ class NinerouterEmbeddingProvider:
         model: str,
         expected_dimensions: int,
     ) -> list[list[float]]:
-        if not texts:
+        inputs = list(texts)
+        if not inputs:
             return []
-        try:
-            response = await self.gateway.post(
-                "/v1/embeddings",
-                payload={
-                    "model": model,
-                    "input": list(texts),
-                    "dimensions": expected_dimensions,
-                },
-                read_timeout_seconds=self.timeout_seconds,
-            )
-        except ModelGatewayTransportError as exc:
-            raise EmbeddingProviderError(
-                "9Router embeddings request failed after bounded transport retries"
-            ) from exc
-        if response.status_code >= 400:
-            raise EmbeddingProviderError(
-                f"9Router embeddings request failed with HTTP {response.status_code}"
-            )
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = await self._get_client().post(
+                    f"{self.base_url}/api/embed",
+                    json={"model": model, "input": inputs},
+                    timeout=httpx.Timeout(
+                        connect=self.connect_timeout_seconds,
+                        read=self.timeout_seconds,
+                        write=30.0,
+                        pool=10.0,
+                    ),
+                )
+                if response.status_code >= 400:
+                    if not is_retryable_status(response.status_code):
+                        raise EmbeddingProviderError(
+                            f"Ollama embeddings request failed with HTTP {response.status_code}"
+                        )
+                    response.raise_for_status()
+                payload: Any = response.json()
+                vectors = payload["embeddings"]
+                if not isinstance(vectors, list) or not all(
+                    isinstance(vector, list) for vector in vectors
+                ):
+                    raise EmbeddingProviderError("Ollama returned an invalid embeddings response")
+                return validate_embeddings(
+                    vectors,
+                    expected_count=len(inputs),
+                    expected_dimensions=expected_dimensions,
+                )
+            except (EmbeddingProviderError, EmbeddingDimensionError):
+                raise
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                raise EmbeddingProviderError(
+                    "Ollama returned a malformed embeddings response"
+                ) from exc
+            except (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.HTTPStatusError,
+            ) as exc:
+                last_error = exc
+                if attempt >= self.max_attempts:
+                    break
+                await asyncio.sleep(min(2 ** (attempt - 1), 8))
+        raise EmbeddingTransportError(
+            "Ollama remained unavailable after bounded embedding retries"
+        ) from last_error
 
-        try:
-            payload: Any = response.json()
-            items = payload["data"]
-            ordered = sorted(items, key=lambda item: int(item["index"]))
-            vectors = [item["embedding"] for item in ordered]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise EmbeddingProviderError("9Router returned an invalid embeddings response") from exc
-        if not all(isinstance(vector, list) for vector in vectors):
-            raise EmbeddingProviderError("9Router returned an invalid embedding vector")
-        return validate_embeddings(
-            vectors,
-            expected_count=len(texts),
-            expected_dimensions=expected_dimensions,
-        )
+
+ollama_embedding_provider = OllamaEmbeddingProvider(
+    base_url=settings.ollama_base_url,
+    timeout_seconds=settings.embedding_timeout_seconds,
+    connect_timeout_seconds=settings.ollama_connect_timeout_seconds,
+    max_attempts=settings.embedding_max_attempts,
+)

@@ -22,8 +22,8 @@ async def test_terminal_statuses_are_not_retried(status: int) -> None:
     client.post.return_value = httpx.Response(status)
 
     response = await gateway(client).post(
-        "/v1/embeddings",
-        payload={"model": "neovids-embedding", "input": ["probe"]},
+        "/v1/chat/completions",
+        payload={"model": "neovids-vision", "messages": []},
         read_timeout_seconds=5.0,
     )
 

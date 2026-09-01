@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db as _get_db
 from app.services.embedding_provider import (
     EmbeddingProvider,
-    NinerouterEmbeddingProvider,
+    ollama_embedding_provider,
 )
 from app.services.storage import LocalStorage, Storage
 
@@ -21,7 +21,7 @@ def get_storage() -> Storage:
 
 @lru_cache
 def get_embedding_provider() -> EmbeddingProvider:
-    return NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
+    return ollama_embedding_provider
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

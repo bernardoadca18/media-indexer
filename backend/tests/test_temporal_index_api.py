@@ -17,7 +17,7 @@ from app.services.temporal_index import TemporalIndexProcessor
 
 
 class ApiEmbeddingProvider:
-    name = "ninerouter"
+    name = "ollama"
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -139,6 +139,9 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
     job_id = UUID(created["job"]["id"])
     assert created["created"] is True
     assert created["job"]["temporal_index_id"] == str(temporal_index_id)
+    assert created["temporal_index"]["embedding_provider"] == "ollama"
+    assert created["temporal_index"]["embedding_model"] == "mxbai-embed-large:latest"
+    assert created["temporal_index"]["embedding_dimensions"] == 1024
 
     repeated = await client.post(f"/sessions/{session_id}/temporal-indexes", json=payload)
     assert repeated.status_code == 202

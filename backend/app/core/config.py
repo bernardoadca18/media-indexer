@@ -46,9 +46,12 @@ class Settings(BaseSettings):
     ninerouter_api_key: str = ""
     model_gateway_connect_timeout_seconds: float = 10.0
     model_gateway_max_attempts: int = 3
-    embedding_model: str = "neovids-embedding"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_connect_timeout_seconds: float = 5.0
+    embedding_model: str = "mxbai-embed-large:latest"
     embedding_dimensions: int = 1024
     embedding_timeout_seconds: float = 60.0
+    embedding_max_attempts: int = 3
     embedding_batch_size: int = 32
     temporal_target_duration_seconds: float = 30.0
     temporal_min_duration_seconds: float = 15.0
@@ -93,6 +96,14 @@ class Settings(BaseSettings):
         normalized = value.rstrip("/")
         if normalized.casefold().endswith("/v1"):
             raise ValueError("NINEROUTER_BASE_URL must not include the /v1 suffix")
+        return normalized
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def validate_ollama_base_url(cls, value: str) -> str:
+        normalized = value.rstrip("/")
+        if normalized.casefold().endswith("/api"):
+            raise ValueError("OLLAMA_BASE_URL must not include the /api suffix")
         return normalized
 
 

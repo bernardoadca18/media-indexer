@@ -28,8 +28,8 @@ Searchable temporal indexing is now an implemented roadmap phase. Keep
 TemporalIndex as an independent job over explicit completed Transcription and
 VisualIndex inputs. TemporalSegments must cover silence without invented text,
 retain normalized evidence links, and embed only non-empty search_text through
-the 9Router-compatible EmbeddingProvider. Tests use fake providers; real
-9Router and pgvector checks remain explicit smokes.
+the direct Ollama EmbeddingProvider. Tests use fake providers; real Ollama and
+pgvector checks remain explicit smokes.
 
 Candidate Retrieval is now implemented as a synchronous persisted stage over a
 completed TemporalIndex. Keep RetrievalRun strategy/configuration identity,
@@ -44,10 +44,12 @@ candidate-only frame sampling and versioned prompts. Unmatched/no_candidates are
 valid completed outcomes. Tests use fake providers and frame extractors; real
 9Router/FFmpeg evaluation is an explicit smoke requiring credentials.
 
-9Router is the provider-neutral OpenAI-compatible gateway here. Never hardwire
-Gemini or another underlying model, persist base64, expose host paths, request
-hidden chain-of-thought, or convert provider failures into unmatched. Provider
-adapters do not retry; bounded ProcessingJob attempts are the single retry layer.
+9Router is the provider-neutral OpenAI-compatible gateway for multimodal
+alignment. Direct Ollama is the sole production boundary for text embeddings.
+Never hardwire an underlying chat/vision provider, persist base64, expose host
+paths, request hidden chain-of-thought, or convert provider failures into
+unmatched. The Ollama adapter may retry only bounded transient transport
+failures; durable alignment retries remain owned by ProcessingJob attempts.
 
 Consolidated Semantic Timeline is now an implemented read-only projection over
 an explicit completed TemporalIndex and an optional compatible completed
@@ -60,7 +62,7 @@ Project/Session Media Search is now implemented as a synchronous public API.
 Keep TemporalIndex resolution explicit with documented conflict handling. Embed
 the query once per compatibility group, not per session. Reuse CandidateRetriever
 logic without duplicating code. No automatic multimodal alignment. Tests use fake
-embeddings; real 9Router evaluation is an explicit smoke.
+embeddings; real Ollama evaluation is an explicit smoke.
 
 Stage 16 source materialization is supported through read-only MediaAsset metadata/content routes.
 Keep lookup restricted to logical IDs and managed storage resolution. Metadata must not expose

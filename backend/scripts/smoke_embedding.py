@@ -1,4 +1,4 @@
-"""Smoke-test the configured 9Router embedding alias.
+"""Smoke-test the configured direct Ollama embedding model.
 
 Run from backend:
     python scripts/smoke_embedding.py --text "Geralt learns Aard"
@@ -13,23 +13,25 @@ import argparse
 import asyncio
 
 from app.core.config import settings
-from app.services.embedding_provider import NinerouterEmbeddingProvider
+from app.services.embedding_provider import ollama_embedding_provider
 
 
 async def run(text: str) -> None:
-    provider = NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
-    vectors = await provider.embed(
-        [text],
-        model=settings.embedding_model,
-        expected_dimensions=settings.embedding_dimensions,
-    )
-    print(
-        {
-            "provider": provider.name,
-            "model": settings.embedding_model,
-            "dimensions": len(vectors[0]),
-        }
-    )
+    try:
+        vectors = await ollama_embedding_provider.embed(
+            [text],
+            model=settings.embedding_model,
+            expected_dimensions=settings.embedding_dimensions,
+        )
+        print(
+            {
+                "provider": ollama_embedding_provider.name,
+                "model": settings.embedding_model,
+                "dimensions": len(vectors[0]),
+            }
+        )
+    finally:
+        await ollama_embedding_provider.close()
 
 
 def main() -> None:

@@ -24,6 +24,25 @@ class InvalidAlignmentOutputError(ValueError):
     pass
 
 
+def parse_structured_json(raw: str) -> dict[str, Any]:
+    """Accept a JSON object or one JSON-only Markdown fence from the gateway."""
+
+    candidate = raw.strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if (
+            len(lines) < 3
+            or lines[0].casefold() not in {"```", "```json"}
+            or lines[-1].strip() != "```"
+        ):
+            raise ValueError("invalid structured JSON fence")
+        candidate = "\n".join(lines[1:-1]).strip()
+    parsed = json.loads(candidate)
+    if not isinstance(parsed, dict):
+        raise TypeError("structured alignment output must be an object")
+    return parsed
+
+
 class AlignmentAnchor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -200,7 +219,7 @@ class NinerouterMultimodalAlignmentProvider:
             raw_content = payload["choices"][0]["message"]["content"]
             if not isinstance(raw_content, str):
                 raise TypeError
-            result = AlignmentProviderResult.model_validate(json.loads(raw_content))
+            result = AlignmentProviderResult.model_validate(parse_structured_json(raw_content))
             usage = payload.get("usage")
             provider_metadata = {
                 key: payload[key]

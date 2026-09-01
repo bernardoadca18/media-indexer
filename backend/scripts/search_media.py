@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual evaluation script for Media Search.
 
-This script allows testing Media Search with real data through 9Router.
+This script allows testing Media Search with real data through direct Ollama embeddings.
 
 Usage:
     python scripts/search_media.py --project-id <UUID> --query "Geralt learning Aard"
@@ -19,8 +19,8 @@ Options:
 
 Environment:
     DATABASE_URL: PostgreSQL async connection string
-    NINEROUTER_BASE_URL: 9Router service base URL (without /v1)
-    NINEROUTER_API_KEY: 9Router API key
+    OLLAMA_BASE_URL: Ollama service base URL (without /api)
+    EMBEDDING_MODEL: embedding-capable Ollama model tag
 """
 
 import argparse
@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.schemas.media_search import MediaSearchRequest
-from app.services.embedding_provider import NinerouterEmbeddingProvider
+from app.services.embedding_provider import ollama_embedding_provider
 from app.services.media_search import MediaSearchService
 
 
@@ -66,9 +66,9 @@ def print_text_results(response: Any) -> None:
         f"\nEmbedding: {response.embedding_provider}/{response.embedding_model} ({response.embedding_dimensions}d)"
     )
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"RESULTS ({len(response.results)} total)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if not response.results:
         print("No results found.")
@@ -92,9 +92,9 @@ def print_text_results(response: Any) -> None:
             print(f"   Matched notes: {len(result.matched_note_ids)}")
 
     if response.scope == "project" and response.session_summaries:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("SESSION SUMMARY")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         for summary in response.session_summaries:
             status = "✓ searched" if summary.searched else f"✗ skipped: {summary.skip_reason}"
@@ -107,11 +107,6 @@ def print_json_results(response: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
-async def get_embedding_provider() -> Any:
-    """Get the production embedding provider boundary."""
-    return NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
-
-
 async def search_session(
     db: AsyncSession,
     session_id: UUID,
@@ -121,8 +116,7 @@ async def search_session(
     output_format: str,
 ) -> int:
     """Execute session search and print results."""
-    provider = await get_embedding_provider()
-    service = MediaSearchService(db, provider)
+    service = MediaSearchService(db, ollama_embedding_provider)
 
     request = MediaSearchRequest(
         query=query,
@@ -157,8 +151,7 @@ async def search_project(
     output_format: str,
 ) -> int:
     """Execute project search and print results."""
-    provider = await get_embedding_provider()
-    service = MediaSearchService(db, provider)
+    service = MediaSearchService(db, ollama_embedding_provider)
 
     request = MediaSearchRequest(
         query=query,
@@ -206,17 +199,17 @@ async def main() -> int:
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with async_session() as db:
-        if args.session_id:
-            return await search_session(
-                db,
-                args.session_id,
-                args.query,
-                args.max_results,
-                args.min_score,
-                args.format,
-            )
-        else:
+    try:
+        async with async_session() as db:
+            if args.session_id:
+                return await search_session(
+                    db,
+                    args.session_id,
+                    args.query,
+                    args.max_results,
+                    args.min_score,
+                    args.format,
+                )
             return await search_project(
                 db,
                 args.project_id,
@@ -225,6 +218,9 @@ async def main() -> int:
                 args.min_score,
                 args.format,
             )
+    finally:
+        await ollama_embedding_provider.close()
+        await engine.dispose()
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ async def create_temporal_index(
     session_id: UUID,
     payload: TemporalIndexCreate,
     db: DB,
+    embedding_provider: EmbeddingDep,
 ) -> TemporalIndexJobOut:
     request = TemporalIndexRequest(
         transcription_id=payload.transcription_id,
@@ -59,7 +60,7 @@ async def create_temporal_index(
             if payload.max_duration_seconds is None
             else payload.max_duration_seconds
         ),
-        embedding_provider="ninerouter",
+        embedding_provider=embedding_provider.name,
         embedding_model=settings.embedding_model,
         embedding_dimensions=settings.embedding_dimensions,
     )

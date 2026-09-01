@@ -136,6 +136,30 @@ async def test_ninerouter_alignment_provider_sends_structured_multimodal_contrac
     assert "local://frame.jpg" not in json.dumps(body)
 
 
+async def test_ninerouter_alignment_accepts_json_only_markdown_fence() -> None:
+    request = httpx.Request("POST", "http://9router.test/v1/chat/completions")
+    raw = json.dumps(
+        {
+            "matched": False,
+            "start_seconds": None,
+            "end_seconds": None,
+            "confidence": 0.8,
+            "anchors": [],
+            "reasoning_summary": "The observation is not visible.",
+        }
+    )
+    FakeAsyncClient.response = httpx.Response(
+        200,
+        request=request,
+        json={"choices": [{"message": {"content": f"```json\n{raw}\n```"}}]},
+    )
+    provider = NinerouterMultimodalAlignmentProvider(5.0, gateway(""))
+
+    response = await provider.align(provider_request(), model="alignment-alias")
+
+    assert response.result.matched is False
+
+
 async def test_ninerouter_alignment_provider_maps_http_failure_after_bound() -> None:
     request = httpx.Request("POST", "http://9router.test/v1/chat/completions")
     FakeAsyncClient.response = httpx.Response(503, request=request)

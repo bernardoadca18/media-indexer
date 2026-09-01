@@ -26,7 +26,7 @@ Searchable temporal indexing is implemented as a fourth durable stage:
 
 - full-duration deterministic TemporalSegments, including silent intervals;
 - normalized links to transcript, scene and representative-frame evidence;
-- batch textual embeddings through the OpenAI-compatible 9Router gateway;
+- batch textual embeddings through direct Ollama `/api/embed`;
 - pgvector vector(1024) storage and exact cosine similarity scoped by index;
 - independent temporal_index jobs, configuration identity and retry-safe rebuild;
 - explicit asynchronous API, pagination and low-level vector search.

@@ -108,11 +108,11 @@ owns points at the exact media end. Silent segments keep empty text and
 embedding_status=not_applicable.
 
 EmbeddingProvider is intentionally embedding-specific. The production adapter
-sends arrays of non-empty search_text values to 9Router's OpenAI-compatible
-/v1/embeddings endpoint. Provider responses are reordered by input index and
-validated for count, finite values and exactly 1024 dimensions before
-persistence. The configured dimension is also checked against the schema
-constant; changing it requires a migration.
+sends arrays of non-empty search_text values directly to Ollama's `/api/embed`
+endpoint. Provider responses must preserve request order and are validated for
+count, finite values and exactly 1024 dimensions before persistence. The
+configured dimension is also checked against the schema constant; changing it
+requires a migration.
 
 Migration 0004 enables pgvector and stores embeddings directly on
 TemporalSegment because provider/model/dimension are immutable provenance on
@@ -281,7 +281,8 @@ labels and transcript previews provide context without requiring separate API ca
 No multimodal alignment is triggered; the API returns deterministic retrieval results
 only.
 
-EmbeddingProvider follows the same pattern as other stages. NinerouterEmbeddingProvider
-targets the OpenAI-compatible /v1/embeddings endpoint. FakeEmbeddingProvider enables
-deterministic testing without external dependencies. The service validates provider
-responses for dimension count and finite values before search.
+EmbeddingProvider follows the same pattern as other stages.
+OllamaEmbeddingProvider targets direct Ollama `/api/embed` while 9Router remains
+the separate multimodal alignment gateway. FakeEmbeddingProvider enables
+deterministic testing without external dependencies. The service validates
+provider responses for count, exact dimensions and finite values before search.

@@ -4,7 +4,7 @@ Run from backend:
     python scripts/retrieve_note_candidates.py \
         --temporal-index-id UUID --note-id UUID
 
-Requires DATABASE_URL plus valid 9Router embedding configuration.
+Requires DATABASE_URL plus valid direct Ollama embedding configuration.
 """
 
 import sys
@@ -23,7 +23,7 @@ from app.services.candidate_retrieval import (
     CandidateRetrievalConfig,
     CandidateRetrievalService,
 )
-from app.services.embedding_provider import NinerouterEmbeddingProvider
+from app.services.embedding_provider import ollama_embedding_provider
 
 
 def format_timestamp(seconds: float) -> str:
@@ -34,7 +34,6 @@ def format_timestamp(seconds: float) -> str:
 
 
 async def run(temporal_index_id: UUID, note_id: UUID) -> None:
-    provider = NinerouterEmbeddingProvider(settings.embedding_timeout_seconds)
     config = CandidateRetrievalConfig(
         hit_limit=settings.candidate_hit_limit,
         max_candidates=settings.candidate_max_results,
@@ -44,28 +43,31 @@ async def run(temporal_index_id: UUID, note_id: UUID) -> None:
         context_after_seconds=settings.candidate_context_after_seconds,
         max_candidate_duration_seconds=settings.candidate_max_duration_seconds,
     )
-    async with AsyncSessionLocal() as db:
-        note = await db.get(Note, note_id)
-        if note is None:
-            raise LookupError("note not found")
-        result = await CandidateRetrievalService(db, provider).retrieve_notes(
-            temporal_index_id,
-            [note_id],
-            config,
-        )
-        print("NOTE:")
-        print(note.raw)
-        print()
-        if not result.candidates:
-            print("No candidates above the configured semantic threshold.")
-            return
-        for candidate in result.candidates:
-            print(
-                f"{candidate.rank}. "
-                f"{format_timestamp(candidate.start_seconds)}-"
-                f"{format_timestamp(candidate.end_seconds)} "
-                f"score={candidate.score:.4f}"
+    try:
+        async with AsyncSessionLocal() as db:
+            note = await db.get(Note, note_id)
+            if note is None:
+                raise LookupError("note not found")
+            result = await CandidateRetrievalService(db, ollama_embedding_provider).retrieve_notes(
+                temporal_index_id,
+                [note_id],
+                config,
             )
+            print("NOTE:")
+            print(note.raw)
+            print()
+            if not result.candidates:
+                print("No candidates above the configured semantic threshold.")
+                return
+            for candidate in result.candidates:
+                print(
+                    f"{candidate.rank}. "
+                    f"{format_timestamp(candidate.start_seconds)}-"
+                    f"{format_timestamp(candidate.end_seconds)} "
+                    f"score={candidate.score:.4f}"
+                )
+    finally:
+        await ollama_embedding_provider.close()
 
 
 def main() -> None:
