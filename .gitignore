@@ -8,3 +8,4 @@ __pycache__/
 .coverage
 storage/*
 !storage/.gitkeep
+repomix-output.xml
