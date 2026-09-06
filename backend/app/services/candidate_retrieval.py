@@ -68,6 +68,8 @@ class RetrievalSubject:
     query: str
     note_id: UUID | None = None
     chronological_position: float | None = None
+    explicit_start_seconds: float | None = None
+    explicit_end_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -351,6 +353,8 @@ class CandidateRetrievalService:
                 query=enriched_query,
                 note_id=note.id,
                 chronological_position=chronological_position,
+                explicit_start_seconds=note.start_seconds,
+                explicit_end_seconds=note.end_seconds,
             ))
         return await self._execute(
             temporal_index_id,
@@ -496,10 +500,42 @@ class CandidateRetrievalService:
             )
             persisted: list[RetrievalCandidate] = []
             for subject in subjects:
-                for rank, definition in enumerate(
-                    definitions[subject.subject_key],
-                    start=1,
+                rank = 1
+                # Create direct candidate if subject has explicit temporal bounds
+                if (
+                    subject.explicit_start_seconds is not None
+                    and subject.explicit_end_seconds is not None
                 ):
+                    direct_candidate = RetrievalCandidate(
+                        retrieval_run_id=run.id,
+                        note_id=subject.note_id,
+                        subject_key=subject.subject_key,
+                        rank=rank,
+                        start_seconds=subject.explicit_start_seconds,
+                        end_seconds=subject.explicit_end_seconds,
+                        duration_seconds=(
+                            subject.explicit_end_seconds - subject.explicit_start_seconds
+                        ),
+                        score=1.0,
+                        score_components={
+                            "source": "explicit",
+                            "semantic_max": 0.0,
+                            "semantic_avg": 0.0,
+                            "chronological_prior": 0.0,
+                        },
+                        candidate_metadata={
+                            "source": "explicit_temporal_range",
+                            "explicit_start_seconds": subject.explicit_start_seconds,
+                            "explicit_end_seconds": subject.explicit_end_seconds,
+                        },
+                    )
+                    self.db.add(direct_candidate)
+                    await self.db.flush()
+                    persisted.append(direct_candidate)
+                    rank += 1
+
+                # Add semantic candidates from search results
+                for definition in definitions[subject.subject_key]:
                     candidate = RetrievalCandidate(
                         retrieval_run_id=run.id,
                         note_id=subject.note_id,
@@ -511,6 +547,7 @@ class CandidateRetrievalService:
                         score=definition.score,
                         score_components=definition.score_components,
                         candidate_metadata={
+                            "source": "semantic",
                             "cluster_start_seconds": (definition.cluster_start_seconds),
                             "cluster_end_seconds": definition.cluster_end_seconds,
                             "context_before_seconds": config.context_before_seconds,
@@ -534,6 +571,7 @@ class CandidateRetrievalService:
                         ]
                     )
                     persisted.append(candidate)
+                    rank += 1
             run.status = "completed"
             run.completed_at = datetime.now(UTC)
             await self.db.commit()

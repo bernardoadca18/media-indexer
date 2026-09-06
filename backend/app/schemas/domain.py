@@ -43,8 +43,8 @@ class StructuredNoteIn(BaseModel):
 
     def model_post_init(self, context: Any) -> None:
         if self.start_seconds is not None and self.end_seconds is not None:
-            if self.end_seconds < self.start_seconds:
-                raise ValueError("end_seconds must be >= start_seconds")
+            if self.end_seconds <= self.start_seconds:
+                raise ValueError("end_seconds must be greater than start_seconds")
 
 
 class TimelineNoteObservation(BaseModel):

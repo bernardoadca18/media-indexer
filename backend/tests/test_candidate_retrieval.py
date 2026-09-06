@@ -478,6 +478,71 @@ async def test_note_batch_preserves_raw_batches_embeddings_and_rejects_foreign_n
             )
 
 
+async def test_explicit_temporal_range_produces_direct_candidate(
+    session_factory,
+    monkeypatch,
+) -> None:
+    """Test that notes with explicit start/end_seconds produce a direct candidate."""
+    provider = FakeEmbeddingProvider()
+    async with session_factory() as db:
+        domain = await seed_retrieval_domain(db)
+        install_fake_search(monkeypatch, domain["segments"])
+
+        # Add explicit temporal bounds to the first note
+        note = domain["notes"][0]
+        note.start_seconds = 30.0
+        note.end_seconds = 60.0
+        note.description = "Explicit temporal note"
+        await db.commit()
+
+        result = await CandidateRetrievalService(db, provider).retrieve_notes(
+            domain["temporal_index"].id,
+            [note.id],
+            CandidateRetrievalConfig(),
+        )
+
+        # Should have direct candidate (rank 1) + semantic candidates (rank 2+)
+        note_candidates = [c for c in result.candidates if c.note_id == note.id]
+        assert len(note_candidates) >= 1
+
+        # Direct candidate should be rank 1 with score 1.0
+        direct = next((c for c in note_candidates if c.rank == 1), None)
+        assert direct is not None
+        assert direct.score == 1.0
+        assert direct.start_seconds == 30.0
+        assert direct.end_seconds == 60.0
+        assert direct.score_components.get("source") == "explicit"
+        assert direct.candidate_metadata.get("source") == "explicit_temporal_range"
+
+
+async def test_note_without_explicit_range_only_has_semantic_candidates(
+    session_factory,
+    monkeypatch,
+) -> None:
+    """Test that notes without explicit temporal bounds only produce semantic candidates."""
+    provider = FakeEmbeddingProvider()
+    async with session_factory() as db:
+        domain = await seed_retrieval_domain(db)
+        install_fake_search(monkeypatch, domain["segments"])
+
+        # Note has no start_seconds/end_seconds (default None)
+        note = domain["notes"][0]
+        assert note.start_seconds is None
+        assert note.end_seconds is None
+
+        result = await CandidateRetrievalService(db, provider).retrieve_notes(
+            domain["temporal_index"].id,
+            [note.id],
+            CandidateRetrievalConfig(),
+        )
+
+        note_candidates = [c for c in result.candidates if c.note_id == note.id]
+        # All candidates should be semantic (source != "explicit")
+        for candidate in note_candidates:
+            assert candidate.score_components.get("source") != "explicit"
+            assert candidate.candidate_metadata.get("source") != "explicit_temporal_range"
+
+
 async def test_provider_failure_persists_failed_run_and_retry_rebuilds(
     session_factory,
     monkeypatch,

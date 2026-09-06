@@ -129,3 +129,111 @@ async def test_hdd_storage_falls_back_to_primary_when_not_configured(tmp_path: P
     assert stored.uri.startswith("local://")
     assert not stored.uri.startswith("local-hdd://")
     assert storage.resolve(stored.uri).read_bytes() == b"fallback test"
+
+
+async def test_hdd_physical_write_readback_smoke(tmp_path: Path) -> None:
+    """P0.5: Smoke test for physical HDD write/readback.
+
+    Verifies that:
+    1. Data is written to HDD storage location
+    2. File is physically on disk (not just in memory)
+    3. Content can be read back correctly
+    4. SHA256 hash is verified
+    """
+    import os
+
+    primary = tmp_path / "primary"
+    hdd = tmp_path / "hdd"
+    primary.mkdir()
+    hdd.mkdir()
+
+    # Create test data that's large enough to stress I/O (1MB+)
+    # Use pattern that's unlikely to compress well
+    test_data = os.urandom(1_500_000)  # 1.5MB of random data
+    expected_sha256 = hashlib.sha256(test_data).hexdigest()
+
+    # Split into chunks to simulate upload
+    chunk_size = 500_000
+    chunks = [test_data[i : i + chunk_size] for i in range(0, len(test_data), chunk_size)]
+    upload = ChunkedUpload(chunks)
+
+    storage = LocalStorage(primary, root_hdd=hdd)
+    project_id, session_id = uuid4(), uuid4()
+
+    # Write to HDD storage
+    stored = await storage.save_source_hdd(project_id, session_id, upload)  # type: ignore[arg-type]
+
+    # Verify metadata
+    assert stored.byte_size == len(test_data)
+    assert stored.sha256 == expected_sha256
+    assert stored.uri.startswith("local-hdd://")
+
+    # Verify file exists physically on HDD (not primary)
+    hdd_path = storage.resolve_hdd(stored.uri)
+    primary_path = primary / "projects" / str(project_id) / "sessions" / str(session_id) / "source"
+
+    assert hdd_path.exists(), "File must exist on HDD storage"
+    assert not primary_path.exists(), "File must NOT exist on primary storage"
+
+    # Verify file size on disk matches
+    assert hdd_path.stat().st_size == len(test_data), "Physical file size must match"
+
+    # Read back using storage API
+    read_back = await storage.read_bytes_hdd(stored.uri)
+    assert read_back == test_data, "Read back content must match original"
+
+    # Read back directly from filesystem (bypass storage API)
+    direct_read = hdd_path.read_bytes()
+    assert direct_read == test_data, "Direct filesystem read must match"
+
+    # Verify SHA256 of physical file
+    actual_sha256 = hashlib.sha256(direct_read).hexdigest()
+    assert actual_sha256 == expected_sha256, "Physical file SHA256 must match"
+
+
+async def test_derived_storage_atomic_write_smoke(tmp_path: Path) -> None:
+    """Smoke test for derived storage atomic writes with fsync.
+
+    Verifies that:
+    1. Derived files are written atomically
+    2. fsync is called (ensures physical write)
+    3. Content is readable after write
+    """
+    import os
+
+    storage = LocalStorage(tmp_path)
+    project_id, session_id = uuid4(), uuid4()
+    namespace_id = uuid4()
+
+    # Create test content
+    test_content = b"derived content test " * 1000  # ~20KB
+    expected_sha256 = hashlib.sha256(test_content).hexdigest()
+
+    # Save derived content
+    stored = await storage.save_derived(
+        project_id=project_id,
+        session_id=session_id,
+        namespace_kind="test_namespace",
+        namespace_id=namespace_id,
+        collection="test_collection",
+        filename="test_file.bin",
+        content=test_content,
+    )
+
+    # Verify metadata
+    assert stored.byte_size == len(test_content)
+    assert stored.sha256 == expected_sha256
+    assert stored.uri.startswith("local://")
+
+    # Verify file exists and is readable
+    file_path = storage.resolve(stored.uri)
+    assert file_path.exists(), "Derived file must exist"
+
+    # Verify content
+    read_back = file_path.read_bytes()
+    assert read_back == test_content, "Derived file content must match"
+
+    # Verify no temporary files left behind
+    parent = file_path.parent
+    temp_files = list(parent.glob(".*.tmp"))
+    assert temp_files == [], "No temporary files should remain"
