@@ -26,6 +26,51 @@ class NoteOut(ORMModel):
     id: UUID
     order: int
     raw: str
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+
+
+class StructuredNoteIn(BaseModel):
+    """Schema for creating/updating structured timeline notes."""
+    order: int = Field(ge=1)
+    raw: str = Field(min_length=1)
+    start_seconds: float | None = Field(default=None, ge=0)
+    end_seconds: float | None = Field(default=None)
+    description: str | None = None
+    tags: list[str] | None = None
+
+    def model_post_init(self, context: Any) -> None:
+        if self.start_seconds is not None and self.end_seconds is not None:
+            if self.end_seconds < self.start_seconds:
+                raise ValueError("end_seconds must be >= start_seconds")
+
+
+class TimelineNoteObservation(BaseModel):
+    """Single observation for bulk import."""
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    description: str = Field(min_length=1)
+    tags: list[str] | None = None
+
+    def model_post_init(self, context: Any) -> None:
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be greater than start_seconds")
+
+
+class TimelineNotesImportRequest(BaseModel):
+    """Bulk import request for timeline notes."""
+    version: str = Field(pattern="^timeline_notes_v1$")
+    provenance: str = Field(default="manual_import", min_length=1)
+    observations: list[TimelineNoteObservation] = Field(min_length=1)
+
+
+class TimelineNotesImportResult(BaseModel):
+    """Result of bulk timeline notes import."""
+    imported_count: int
+    skipped_count: int
+    errors: list[str] | None = None
 
 
 class MediaOut(ORMModel):

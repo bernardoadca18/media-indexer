@@ -7,11 +7,13 @@ from app.api.dependencies import DB, StorageDep
 from app.models import Note
 from app.repositories.domain import ProjectRepository, SessionRepository
 from app.schemas.domain import (
+    NoteOut,
     ProjectCreate,
     ProjectOut,
     SessionIngestOut,
     SessionOut,
     SessionSummary,
+    StructuredNoteIn,
 )
 from app.services.ingestion import IngestionService, InvalidNotesError, ProjectNotFoundError
 from app.workers.runner import job_runner
@@ -105,3 +107,44 @@ async def import_session_notes(
     await db.commit()
     await db.refresh(session)
     return session
+
+
+@router.patch(
+    "/{project_id}/sessions/{session_id}/notes/{note_id}",
+    response_model=NoteOut,
+    status_code=200,
+)
+async def update_structured_note(
+    project_id: UUID,
+    session_id: UUID,
+    note_id: UUID,
+    db: DB,
+    payload: StructuredNoteIn,
+) -> object:
+    """Update derived temporal fields on a note (preserves raw text)."""
+    from sqlalchemy import select
+
+    stmt = select(Note).where(
+        Note.id == note_id,
+        Note.session_id == session_id,
+    )
+    result = await db.execute(stmt)
+    note = result.scalar_one_or_none()
+
+    if note is None:
+        raise HTTPException(404, "Note not found")
+
+    # Verify session belongs to project
+    session = await SessionRepository(db).get(session_id)
+    if session is None or session.project_id != project_id:
+        raise HTTPException(404, "Session not found")
+
+    # Only update derived temporal fields, raw is immutable via trigger
+    note.start_seconds = payload.start_seconds
+    note.end_seconds = payload.end_seconds
+    note.description = payload.description
+    note.tags = payload.tags
+
+    await db.commit()
+    await db.refresh(note)
+    return note

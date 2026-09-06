@@ -7,11 +7,31 @@ export interface Project {
   created_at: string;
 }
 
+export interface Note {
+  id: string;
+  order: number;
+  raw: string;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  description: string | null;
+  tags: string[] | null;
+}
+
 export interface SessionSummary {
   id: string;
   label: string;
   status: string;
   notes_filename: string | null;
+  created_at: string;
+}
+
+export interface Session {
+  id: string;
+  label: string;
+  status: string;
+  notes_filename: string | null;
+  raw_notes: string | null;
+  notes: Note[];
   created_at: string;
 }
 
@@ -59,6 +79,134 @@ export interface SearchResult {
     type: string;
     ref: string;
   }>;
+}
+
+// Semantic Timeline Types
+export interface TimelineRange {
+  start_seconds: number | null;
+  end_seconds: number | null;
+  semantics: string;
+}
+
+export interface TimelineTranscriptionProvenance {
+  transcription_id: string;
+}
+
+export interface TimelineVisualProvenance {
+  visual_index_id: string;
+}
+
+export interface TimelineAlignmentProvenance {
+  alignment_run_id: string;
+  retrieval_run_id: string;
+  provider: string;
+  model: string;
+  strategy: string;
+  prompt_version: string;
+  configuration_fingerprint: string;
+}
+
+export interface TimelineProvenance {
+  project_id: string;
+  session_id: string;
+  media_id: string;
+  temporal_index_id: string;
+  temporal_index_fingerprint: string;
+  transcription: TimelineTranscriptionProvenance;
+  visual_index: TimelineVisualProvenance;
+  alignment: TimelineAlignmentProvenance | null;
+}
+
+export interface TimelineTranscriptRef {
+  id: string;
+  sequence: number;
+  start_seconds: number;
+  end_seconds: number;
+}
+
+export interface TimelineSceneRef {
+  id: string;
+  sequence: number;
+  start_seconds: number;
+  end_seconds: number;
+}
+
+export interface TimelineFrameRef {
+  id: string;
+  kind: string;
+  timestamp_seconds: number;
+  storage_uri: string;
+  mime_type: string;
+  width: number | null;
+  height: number | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface TimelineEvidence {
+  transcript_segments: TimelineTranscriptRef[];
+  scenes: TimelineSceneRef[];
+  frames: TimelineFrameRef[];
+}
+
+export interface TimelineItem {
+  temporal_segment_id: string;
+  sequence: number;
+  start_seconds: number;
+  end_seconds: number;
+  duration_seconds: number;
+  text: string;
+  metadata: Record<string, unknown> | null;
+  silent: boolean;
+  evidence: TimelineEvidence;
+  matched_note_ids: string[];
+  selected_alignment_ids: string[];
+}
+
+export interface TimelineSelectedAlignment {
+  candidate_alignment_id: string;
+  retrieval_candidate_id: string;
+  retrieval_rank: number;
+  start_seconds: number;
+  end_seconds: number;
+  confidence: number;
+  anchors: Array<Record<string, unknown>>;
+  reasoning_summary: string | null;
+  timestamp_resolution_seconds: number | null;
+  temporal_segment_ids: string[];
+}
+
+export interface TimelineNote {
+  id: string;
+  order: number;
+  raw: string;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  description: string | null;
+  tags: string[] | null;
+  alignment_status: string;
+  alignment_subject_id: string | null;
+  selected_alignment: TimelineSelectedAlignment | null;
+}
+
+export interface SemanticTimeline {
+  provenance: TimelineProvenance;
+  range: TimelineRange;
+  items: TimelineItem[];
+  notes: TimelineNote[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+// Temporal Index Types
+export interface TemporalIndex {
+  id: string;
+  session_id: string;
+  transcription_id: string;
+  visual_index_id: string;
+  status: string;
+  configuration_fingerprint: string;
+  created_at: string;
 }
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
@@ -142,4 +290,34 @@ export const api = {
 
   searchGlobal: (query: string, limit = 20) =>
     fetchJSON<SearchResult[]>(`/search?q=${encodeURIComponent(query)}&limit=${limit}`),
+
+  // Semantic Timeline
+  getSemanticTimeline: (
+    sessionId: string,
+    params: {
+      temporal_index_id: string;
+      alignment_run_id?: string;
+      start_seconds?: number;
+      end_seconds?: number;
+      offset?: number;
+      limit?: number;
+    }
+  ) => {
+    const searchParams = new URLSearchParams();
+    searchParams.set('temporal_index_id', params.temporal_index_id);
+    if (params.alignment_run_id) searchParams.set('alignment_run_id', params.alignment_run_id);
+    if (params.start_seconds !== undefined) searchParams.set('start_seconds', String(params.start_seconds));
+    if (params.end_seconds !== undefined) searchParams.set('end_seconds', String(params.end_seconds));
+    if (params.offset !== undefined) searchParams.set('offset', String(params.offset));
+    if (params.limit !== undefined) searchParams.set('limit', String(params.limit));
+    return fetchJSON<SemanticTimeline>(`/sessions/${sessionId}/semantic-timeline?${searchParams}`);
+  },
+
+  // Temporal Indexes
+  listTemporalIndexes: (sessionId: string) =>
+    fetchJSON<TemporalIndex[]>(`/sessions/${sessionId}/temporal-indexes`),
+
+  // Session details
+  getSession: (sessionId: string) =>
+    fetchJSON<Session>(`/sessions/${sessionId}`),
 };

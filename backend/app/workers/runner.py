@@ -24,7 +24,10 @@ logger = structlog.get_logger(__name__)
 
 
 def build_default_registry() -> ProcessorRegistry:
-    storage = LocalStorage(settings.storage_root)
+    storage = LocalStorage(
+        settings.storage_root,
+        root_hdd=settings.storage_root_hdd,
+    )
     transcription_provider = FasterWhisperProvider(
         device=settings.whisper_device,
         compute_type=settings.whisper_compute_type,

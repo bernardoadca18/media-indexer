@@ -16,7 +16,10 @@ from app.services.storage import LocalStorage, Storage
 
 @lru_cache
 def get_storage() -> Storage:
-    return LocalStorage(settings.storage_root)
+    return LocalStorage(
+        settings.storage_root,
+        root_hdd=settings.storage_root_hdd,
+    )
 
 
 @lru_cache

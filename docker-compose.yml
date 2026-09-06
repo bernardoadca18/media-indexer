@@ -32,6 +32,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://media_indexer:media_indexer@db:5432/media_indexer}
       STORAGE_ROOT: ${STORAGE_ROOT:-/data/storage}
+      STORAGE_ROOT_HDD: ${STORAGE_ROOT_HDD:-}
+      STORAGE_HDD_THRESHOLD_BYTES: ${STORAGE_HDD_THRESHOLD_BYTES:-104857600}
       WORKER_ENABLED: ${WORKER_ENABLED:-true}
       JOB_STALE_TIMEOUT_SECONDS: ${JOB_STALE_TIMEOUT_SECONDS:-300}
       JOB_HEARTBEAT_INTERVAL_SECONDS: ${JOB_HEARTBEAT_INTERVAL_SECONDS:-30}
@@ -97,6 +99,9 @@ services:
     volumes:
       - "./storage:/data/storage"
       - "media-indexer-model-cache:/data/models"
+      # Optional HDD storage - set MEDIA_INDEXER_HDD_HOST_PATH env var to enable
+      # When not set, a dummy named volume is used (HDD disabled)
+      - "${MEDIA_INDEXER_HDD_HOST_PATH:-media-indexer-hdd-disabled}:/data/media-hdd:rw"
     depends_on:
       db:
         condition: service_healthy
@@ -120,6 +125,8 @@ services:
 volumes:
   media-indexer-db-data:
   media-indexer-model-cache:
+  media-indexer-hdd-disabled:
+    # Dummy volume used when HDD is not configured
 
 networks:
   neovids:

@@ -73,10 +73,25 @@ class MediaSession(Base, UUIDPrimaryKey, TimestampMixin):
 
 class Note(Base, UUIDPrimaryKey):
     __tablename__ = "notes"
-    __table_args__ = (UniqueConstraint("session_id", "order", name="uq_note_session_order"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "order", name="uq_note_session_order"),
+        CheckConstraint(
+            "start_seconds IS NULL OR start_seconds >= 0", name="ck_note_start_nonnegative"
+        ),
+        CheckConstraint(
+            "start_seconds IS NULL OR end_seconds IS NULL OR end_seconds >= start_seconds",
+            name="ck_note_valid_range",
+        ),
+        Index("ix_notes_session_start", "session_id", "start_seconds"),
+    )
     session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
     order: Mapped[int] = mapped_column(Integer)
     raw: Mapped[str] = mapped_column(Text)
+    # Derived temporal fields for structured timeline notes
+    start_seconds: Mapped[float | None] = mapped_column(Float)
+    end_seconds: Mapped[float | None] = mapped_column(Float)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list[str] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

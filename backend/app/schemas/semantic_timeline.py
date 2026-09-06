@@ -101,6 +101,12 @@ class TimelineNoteOut(BaseModel):
     id: UUID
     order: int
     raw: str
+    # Structured temporal fields (derived, may be null for raw notes)
+    start_seconds: float | None
+    end_seconds: float | None
+    description: str | None
+    tags: list[str] | None
+    # Alignment status from multimodal alignment pipeline
     alignment_status: str
     alignment_subject_id: UUID | None
     selected_alignment: TimelineSelectedAlignmentOut | None

@@ -309,7 +309,8 @@ class CandidateRetrievalService:
         note_ids: list[UUID] | None,
         config: CandidateRetrievalConfig,
     ) -> RetrievalResult:
-        temporal_index, _ = await self._prerequisites(temporal_index_id)
+        temporal_index, media = await self._prerequisites(temporal_index_id)
+        media_duration = media.duration_seconds or 0
         result = await self.db.execute(
             select(Note).where(Note.session_id == temporal_index.session_id).order_by(Note.order)
         )
@@ -329,15 +330,28 @@ class CandidateRetrievalService:
             notes = [note for note in session_notes if note.id in selected]
 
         count = len(session_notes)
-        subjects = [
-            RetrievalSubject(
+        subjects = []
+        for note in notes:
+            # Build enriched query from structured note fields
+            query_parts = [note.raw]
+            if note.description:
+                query_parts.append(note.description)
+            if note.tags:
+                query_parts.extend(note.tags)
+            enriched_query = normalize_query(" ".join(query_parts))
+
+            # Use explicit temporal bounds if available for chronological position
+            if note.start_seconds is not None and media_duration > 0:
+                chronological_position = note.start_seconds / media_duration
+            else:
+                chronological_position = ((note.order - 1) / (count - 1) if count > 1 else 0.5)
+
+            subjects.append(RetrievalSubject(
                 subject_key=f"note:{note.id}",
-                query=normalize_query(note.raw),
+                query=enriched_query,
                 note_id=note.id,
-                chronological_position=((note.order - 1) / (count - 1) if count > 1 else 0.5),
-            )
-            for note in notes
-        ]
+                chronological_position=chronological_position,
+            ))
         return await self._execute(
             temporal_index_id,
             kind="notes",
