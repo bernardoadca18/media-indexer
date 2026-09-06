@@ -43,6 +43,7 @@ class Storage(Protocol):
         namespace_id: UUID,
     ) -> None: ...
     def resolve(self, uri: str) -> Path: ...
+    def resolve_any(self, uri: str) -> Path: ...
     async def read_bytes_hdd(self, uri: str) -> bytes: ...
     async def delete(self, uri: str) -> None: ...
 
@@ -131,6 +132,12 @@ class LocalStorage:
         if not candidate.is_relative_to(self.root):
             raise ValueError("storage URI escapes root")
         return candidate
+
+    def resolve_any(self, uri: str) -> Path:
+        """Resolve either local:// or local-hdd:// URI to a filesystem path."""
+        if uri.startswith("local-hdd://"):
+            return self.resolve_hdd(uri)
+        return self.resolve(uri)
 
     async def delete(self, uri: str) -> None:
         path = self.resolve(uri)

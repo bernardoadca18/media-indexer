@@ -525,7 +525,7 @@ class AlignmentProcessor:
             retrieval.configuration,
             run.configuration,
         )
-        source = self.storage.resolve(media.storage_uri)
+        source = self.storage.resolve_any(media.storage_uri)
         builder = AlignmentEvidenceBuilder(self.db, self.storage, self.extractor)
         usage: list[dict[str, Any]] = []
         provider_meta: list[dict[str, Any]] = []

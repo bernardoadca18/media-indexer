@@ -199,8 +199,6 @@ async def test_derived_storage_atomic_write_smoke(tmp_path: Path) -> None:
     2. fsync is called (ensures physical write)
     3. Content is readable after write
     """
-    import os
-
     storage = LocalStorage(tmp_path)
     project_id, session_id = uuid4(), uuid4()
     namespace_id = uuid4()

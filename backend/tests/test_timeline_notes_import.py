@@ -2,7 +2,6 @@
 from io import BytesIO
 from uuid import UUID
 
-import pytest
 from httpx import AsyncClient
 
 from app.repositories.domain import ProjectRepository

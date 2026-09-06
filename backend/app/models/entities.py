@@ -79,7 +79,7 @@ class Note(Base, UUIDPrimaryKey):
             "start_seconds IS NULL OR start_seconds >= 0", name="ck_note_start_nonnegative"
         ),
         CheckConstraint(
-            "start_seconds IS NULL OR end_seconds IS NULL OR end_seconds >= start_seconds",
+            "start_seconds IS NULL OR end_seconds IS NULL OR end_seconds > start_seconds",
             name="ck_note_valid_range",
         ),
         Index("ix_notes_session_start", "session_id", "start_seconds"),

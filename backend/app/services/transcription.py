@@ -193,7 +193,7 @@ class TranscriptionProcessor:
         )
         stream = None
         try:
-            stream = await self.provider.transcribe(self.storage.resolve(media.storage_uri), config)
+            stream = await self.provider.transcribe(self.storage.resolve_any(media.storage_uri), config)
             transcription.language_detected = stream.language
             transcription.duration_seconds = stream.duration_seconds
             transcription.provider_metadata = stream.metadata

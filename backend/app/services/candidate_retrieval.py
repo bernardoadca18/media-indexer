@@ -389,18 +389,26 @@ class CandidateRetrievalService:
         subjects: list[RetrievalSubject],
         config: CandidateRetrievalConfig,
     ) -> dict[str, Any]:
+        subject_configs = []
+        for subject in subjects:
+            subject_config: dict[str, Any] = {
+                "subject_key": subject.subject_key,
+                "query": subject.query if kind == "query" else None,
+                "note_id": str(subject.note_id) if subject.note_id else None,
+            }
+            # Include explicit temporal bounds for notes kind
+            if kind == "notes":
+                if subject.explicit_start_seconds is not None:
+                    subject_config["explicit_start_seconds"] = subject.explicit_start_seconds
+                if subject.explicit_end_seconds is not None:
+                    subject_config["explicit_end_seconds"] = subject.explicit_end_seconds
+            subject_configs.append(subject_config)
+
         return {
             "temporal_index_id": str(temporal_index_id),
             "kind": kind,
             "strategy": RETRIEVAL_STRATEGY,
-            "subjects": [
-                {
-                    "subject_key": subject.subject_key,
-                    "query": subject.query if kind == "query" else None,
-                    "note_id": str(subject.note_id) if subject.note_id else None,
-                }
-                for subject in subjects
-            ],
+            "subjects": subject_configs,
             "retrieval": asdict(config),
             "score_formula": (
                 "query=.60*mean+.30*max+.10*density;"

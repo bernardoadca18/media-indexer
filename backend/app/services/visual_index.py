@@ -294,7 +294,7 @@ class VisualIndexProcessor:
             raise MediaDurationUnavailableError("media duration is required for visual indexing")
 
         duration = media.duration_seconds
-        source = self.storage.resolve(media.storage_uri)
+        source = self.storage.resolve_any(media.storage_uri)
         await self.storage.delete_derived_namespace(
             project_id, session_id, "visual", visual_index.id
         )

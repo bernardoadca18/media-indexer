@@ -22,7 +22,7 @@ class InitialIndexProcessor:
             media = await self.db.get(MediaAsset, media_id)
             session = await self.db.get(MediaSession, session_id)
             assert media is not None and session is not None
-            result = await self.probe.inspect(self.storage.resolve(media.storage_uri))
+            result = await self.probe.inspect(self.storage.resolve_any(media.storage_uri))
             media.duration_seconds = result.duration_seconds
             media.format_name = result.format_name
             media.video_codec = result.video_codec
