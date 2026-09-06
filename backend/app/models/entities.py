@@ -62,8 +62,8 @@ class MediaSession(Base, UUIDPrimaryKey, TimestampMixin):
         ForeignKey("media_assets.id", ondelete="RESTRICT"), unique=True
     )
     label: Mapped[str] = mapped_column(String(200))
-    notes_filename: Mapped[str] = mapped_column(String(500))
-    raw_notes: Mapped[str] = mapped_column(Text)
+    notes_filename: Mapped[str | None] = mapped_column(String(500))
+    raw_notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), default="pending")
     idempotency_key: Mapped[str | None] = mapped_column(String(200))
     project: Mapped[MediaProject] = relationship(back_populates="sessions")

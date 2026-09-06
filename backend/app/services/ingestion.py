@@ -36,7 +36,7 @@ class IngestionService:
         project_id: UUID,
         label: str,
         video: UploadFile,
-        notes: UploadFile,
+        notes: UploadFile | None = None,
         idempotency_key: str | None = None,
     ) -> IngestionResult:
         projects = ProjectRepository(self.db)
@@ -52,14 +52,24 @@ class IngestionService:
                 assert job is not None
                 return IngestionResult(existing, job, False)
 
-        raw_bytes = await notes.read()
-        try:
-            raw_notes = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise InvalidNotesError("notes must be UTF-8") from exc
+        # Handle optional notes file
+        raw_notes: str | None = None
+        notes_filename: str | None = None
+        if notes is not None:
+            raw_bytes = await notes.read()
+            try:
+                raw_notes = raw_bytes.decode("utf-8")
+                notes_filename = notes.filename or "notes.txt"
+            except UnicodeDecodeError as exc:
+                raise InvalidNotesError("notes must be UTF-8") from exc
 
         session_id, media_id = uuid4(), uuid4()
-        stored = await self.storage.save_source(project_id, session_id, video)
+        # Use HDD storage for large files if configured
+        video_size = video.size if hasattr(video, "size") else None
+        if video_size is not None and video_size >= settings.storage_hdd_threshold_bytes:
+            stored = await self.storage.save_source_hdd(project_id, session_id, video)
+        else:
+            stored = await self.storage.save_source(project_id, session_id, video)
         try:
             media = MediaAsset(
                 id=media_id,
@@ -75,7 +85,7 @@ class IngestionService:
                 project_id=project_id,
                 media_id=media_id,
                 label=label,
-                notes_filename=notes.filename or "notes.txt",
+                notes_filename=notes_filename,
                 raw_notes=raw_notes,
                 idempotency_key=idempotency_key,
                 status="pending",
@@ -84,8 +94,10 @@ class IngestionService:
             # Establish FK targets before adding notes/jobs that only carry IDs.
             # This also gives PostgreSQL deterministic flush ordering.
             await self.db.flush()
-            for order, raw in enumerate(split_note_units(raw_notes), start=1):
-                self.db.add(Note(session_id=session_id, order=order, raw=raw))
+            # Only create Note entities if notes were provided
+            if raw_notes is not None:
+                for order, raw in enumerate(split_note_units(raw_notes), start=1):
+                    self.db.add(Note(session_id=session_id, order=order, raw=raw))
             job = ProcessingJob(
                 max_attempts=settings.job_max_attempts,
                 project_id=project_id,

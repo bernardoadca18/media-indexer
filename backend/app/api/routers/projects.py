@@ -4,8 +4,15 @@ from uuid import UUID
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, UploadFile
 
 from app.api.dependencies import DB, StorageDep
+from app.models import Note
 from app.repositories.domain import ProjectRepository, SessionRepository
-from app.schemas.domain import ProjectCreate, ProjectOut, SessionIngestOut, SessionSummary
+from app.schemas.domain import (
+    ProjectCreate,
+    ProjectOut,
+    SessionIngestOut,
+    SessionOut,
+    SessionSummary,
+)
 from app.services.ingestion import IngestionService, InvalidNotesError, ProjectNotFoundError
 from app.workers.runner import job_runner
 
@@ -49,7 +56,7 @@ async def ingest_session(
     storage: StorageDep,
     label: Annotated[str, Form(min_length=1, max_length=200)],
     video: Annotated[UploadFile, File()],
-    notes: Annotated[UploadFile, File()],
+    notes: Annotated[UploadFile | None, File()] = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=200)] = None,
 ) -> object:
     try:
@@ -63,3 +70,38 @@ async def ingest_session(
     if result.created:
         job_runner.enqueue(result.job.id)
     return SessionIngestOut(session=result.session, job=result.job)
+
+
+@router.post(
+    "/{project_id}/sessions/{session_id}/notes", response_model=SessionOut, status_code=200
+)
+async def import_session_notes(
+    project_id: UUID,
+    session_id: UUID,
+    db: DB,
+    notes: Annotated[UploadFile, File()],
+) -> object:
+    """Import notes into an existing session (video-only ingest that now has notes)."""
+    from app.services.note_parser import split_note_units
+
+    session = await SessionRepository(db).get(session_id)
+    if session is None or session.project_id != project_id:
+        raise HTTPException(404, "Session not found")
+    if session.raw_notes is not None:
+        raise HTTPException(409, "Session already has notes")
+
+    raw_bytes = await notes.read()
+    if not raw_bytes.strip():
+        raise HTTPException(400, "notes file cannot be empty")
+    try:
+        raw_notes = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(422, "notes must be UTF-8") from exc
+
+    session.raw_notes = raw_notes
+    session.notes_filename = notes.filename or "notes.txt"
+    for order, raw in enumerate(split_note_units(raw_notes), start=1):
+        db.add(Note(session_id=session_id, order=order, raw=raw))
+    await db.commit()
+    await db.refresh(session)
+    return session

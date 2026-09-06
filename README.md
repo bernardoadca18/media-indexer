@@ -17,6 +17,26 @@ API: http://localhost:8012 (OpenAPI em /docs).
 
 Consulte GET /jobs/{job_id} e GET /sessions/{session_id}.
 
+### Importing notes into a video-only session
+
+A session created without notes (video-only ingest) can receive notes later:
+
+    curl -X POST "http://localhost:8012/projects/$PROJECT_ID/sessions/$SESSION_ID/notes" \
+      -F 'notes=@001.txt'
+
+The endpoint rejects empty files (HTTP 400) and conflicts if the session already
+has notes (HTTP 409). Notes are split into immutable units preserving raw bytes
+exactly. The response is the updated SessionOut with `notes_filename`,
+`raw_notes` and the parsed `notes`.
+
+## HDD storage for large sources
+
+When `STORAGE_HDD_ROOT` is configured and an upload exceeds
+`STORAGE_HDD_THRESHOLD_BYTES`, the source is written to the secondary HDD
+location and referenced by a `local-hdd://` URI instead of the primary
+`local://` storage. `STORAGE_HDD_ROOT` is optional; when unset, all sources use
+the primary storage regardless of size.
+
 ## Desenvolvimento
 
     cd backend

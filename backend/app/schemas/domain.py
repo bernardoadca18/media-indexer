@@ -74,8 +74,8 @@ class SessionSummary(ORMModel):
 
 
 class SessionOut(SessionSummary):
-    notes_filename: str
-    raw_notes: str
+    notes_filename: str | None
+    raw_notes: str | None
     media: MediaOut
     notes: list[NoteOut]
 
