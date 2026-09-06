@@ -34,6 +34,8 @@ services:
       STORAGE_ROOT: ${STORAGE_ROOT:-/data/storage}
       STORAGE_ROOT_HDD: ${STORAGE_ROOT_HDD:-}
       STORAGE_HDD_THRESHOLD_BYTES: ${STORAGE_HDD_THRESHOLD_BYTES:-104857600}
+      # Indicator that HDD mount is present (set when MEDIA_INDEXER_HDD_HOST_PATH is configured)
+      MEDIA_INDEXER_HDD_MOUNT_PATH: ${MEDIA_INDEXER_HDD_HOST_PATH:+/data/media-hdd}
       WORKER_ENABLED: ${WORKER_ENABLED:-true}
       JOB_STALE_TIMEOUT_SECONDS: ${JOB_STALE_TIMEOUT_SECONDS:-300}
       JOB_HEARTBEAT_INTERVAL_SECONDS: ${JOB_HEARTBEAT_INTERVAL_SECONDS:-30}
@@ -99,9 +101,10 @@ services:
     volumes:
       - "./storage:/data/storage"
       - "media-indexer-model-cache:/data/models"
-      # Optional HDD storage - set MEDIA_INDEXER_HDD_HOST_PATH env var to enable
-      # When not set, a dummy named volume is used (HDD disabled)
-      - "${MEDIA_INDEXER_HDD_HOST_PATH:-media-indexer-hdd-disabled}:/data/media-hdd:rw"
+    # Optional HDD storage: uncomment the volume mount below and set MEDIA_INDEXER_HDD_HOST_PATH
+    # in your .env file to enable secondary storage for large files
+    # volumes_additional:
+    #   - "${MEDIA_INDEXER_HDD_HOST_PATH}:/data/media-hdd:rw"
     depends_on:
       db:
         condition: service_healthy
@@ -122,13 +125,31 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  # HDD-enabled variant - use with: docker compose --profile hdd up
+  api-hdd:
+    extends:
+      service: api
+    profiles:
+      - hdd
+    environment:
+      STORAGE_ROOT_HDD: /data/media-hdd
+      MEDIA_INDEXER_HDD_MOUNT_PATH: /data/media-hdd
+    volumes:
+      - "./storage:/data/storage"
+      - "media-indexer-model-cache:/data/models"
+      - "${MEDIA_INDEXER_HDD_HOST_PATH:?Set MEDIA_INDEXER_HDD_HOST_PATH in .env}:/data/media-hdd:rw"
 volumes:
   media-indexer-db-data:
   media-indexer-model-cache:
-  media-indexer-hdd-disabled:
-    # Dummy volume used when HDD is not configured
 
 networks:
   neovids:
     external: true
     name: neovids
+
+# Optional HDD storage profile
+# Usage: docker compose --profile hdd up
+# Requires: MEDIA_INDEXER_HDD_HOST_PATH set in .env
+# Also set: STORAGE_ROOT_HDD=/data/media-hdd
+# And set: STORAGE_HDD_THRESHOLD_BYTES=104857600 (or desired threshold)

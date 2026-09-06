@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     storage_root: Path = Path("./storage")
     storage_root_hdd: Path | None = None
     storage_hdd_threshold_bytes: int = 100 * 1024 * 1024  # 100MB default
+    # Docker-side indicator that HDD mount is present (set by docker-compose)
+    media_indexer_hdd_mount_path: Path | None = None
     ffprobe_binary: str = "ffprobe"
     worker_enabled: bool = True
     log_level: str = "INFO"

@@ -92,6 +92,8 @@ class Note(Base, UUIDPrimaryKey):
     end_seconds: Mapped[float | None] = mapped_column(Float)
     description: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[list[str] | None] = mapped_column(JSON)
+    # Provenance tracking for timeline notes
+    provenance: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
