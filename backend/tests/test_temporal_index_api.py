@@ -199,7 +199,7 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
         assert isinstance(repository, TemporalIndexRepository)
         assert scoped_index_id == temporal_index_id
         assert query_embedding[0] == 1.0
-        assert limit == 5
+        assert limit == 15
         return [TemporalSearchHit(first_segment, 0.91)]
 
     monkeypatch.setattr(TemporalIndexRepository, "search", fake_search)

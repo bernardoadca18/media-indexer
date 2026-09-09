@@ -1,5 +1,7 @@
 import hashlib
 import json
+import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +17,7 @@ from app.models import (
     EMBEDDING_VECTOR_DIMENSIONS,
     DerivedAsset,
     MediaAsset,
+    Note,
     ProcessingJob,
     SceneSegment,
     TemporalIndex,
@@ -74,6 +77,61 @@ class TemporalSegmentDefinition:
     transcript_segment_ids: tuple[UUID, ...]
     scene_segment_ids: tuple[UUID, ...]
     frame_asset_ids: tuple[UUID, ...]
+    timeline_note_ids: tuple[UUID, ...] = ()
+    semantic_source_types: tuple[str, ...] = ()
+
+
+TEMPORAL_SEARCH_TEXT_STRATEGY = "asr_human_timeline_v4_chronological"
+TEMPORAL_QUERY_SCORING_STRATEGY = "embedding_lexical_evidence_v1"
+
+
+def _normalize_semantic_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _semantic_tokens(value: str) -> set[str]:
+    folded = unicodedata.normalize("NFKD", value.casefold())
+    ascii_text = "".join(char for char in folded if not unicodedata.combining(char))
+    return {token for token in re.findall(r"[a-z0-9]+", ascii_text) if len(token) >= 4}
+
+
+def hybrid_semantic_score(query: str, evidence: str, embedding_score: float) -> float:
+    query_tokens = _semantic_tokens(query)
+    evidence_tokens = _semantic_tokens(evidence)
+    lexical_coverage = (
+        len(query_tokens & evidence_tokens) / len(query_tokens) if query_tokens else 0.0
+    )
+    return max(0.0, min(1.0, 0.82 * embedding_score + 0.18 * lexical_coverage))
+
+
+def timeline_note_snapshot_identity(notes: Sequence[Note]) -> str:
+    payload = []
+    for note in sorted(
+        notes,
+        key=lambda item: (
+            float(item.start_seconds or 0.0),
+            float(item.end_seconds or 0.0),
+            str(item.id),
+        ),
+    ):
+        if note.start_seconds is None or note.end_seconds is None:
+            raise ValueError("timeline note snapshot requires structured temporal ranges")
+        payload.append(
+            {
+                "note_id": str(note.id),
+                "start_seconds": float(note.start_seconds),
+                "end_seconds": float(note.end_seconds),
+                "description": _normalize_semantic_text(note.description or ""),
+                "tags": sorted(
+                    _normalize_semantic_text(str(tag))
+                    for tag in (note.tags or [])
+                    if str(tag).strip()
+                ),
+                "provenance": note.provenance,
+            }
+        )
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def temporal_configuration_fingerprint(config: dict[str, Any]) -> str:
@@ -161,6 +219,7 @@ def build_temporal_segments(
     transcript_segments: Sequence[TranscriptSegment],
     scenes: Sequence[SceneSegment],
     frames: Sequence[DerivedAsset],
+    timeline_notes: Sequence[Note] = (),
     *,
     target_duration_seconds: float,
     min_duration_seconds: float,
@@ -203,15 +262,44 @@ def build_temporal_segments(
             )
         ]
         text = " ".join(owned_text)
+        overlapping_notes = [
+            note
+            for note in timeline_notes
+            if note.start_seconds is not None
+            and note.end_seconds is not None
+            and note.end_seconds > start
+            and note.start_seconds < end
+            and bool(_normalize_semantic_text(note.description or ""))
+        ]
+        note_semantics = []
+        for note in overlapping_notes:
+            description = _normalize_semantic_text(note.description or "")
+            tags = " ".join(
+                _normalize_semantic_text(str(tag)) for tag in (note.tags or []) if str(tag).strip()
+            )
+            note_semantics.append(" ".join(part for part in (description, tags) if part))
+        search_parts = [text] if text else []
+        if note_semantics:
+            search_parts.append("Human timeline: " + " ".join(note_semantics))
+        source_types = tuple(
+            source
+            for source, present in (
+                ("asr", bool(text)),
+                ("human_timeline", bool(note_semantics)),
+            )
+            if present
+        )
         definitions.append(
             TemporalSegmentDefinition(
                 start_seconds=start,
                 end_seconds=end,
                 text=text,
-                search_text=text,
+                search_text=" ".join(search_parts),
                 transcript_segment_ids=tuple(item.id for item in transcripts),
                 scene_segment_ids=tuple(item.id for item in overlapping_scenes),
                 frame_asset_ids=tuple(item.id for item in included_frames),
+                timeline_note_ids=tuple(note.id for note in overlapping_notes),
+                semantic_source_types=source_types,
             )
         )
     return definitions
@@ -271,9 +359,12 @@ class TemporalIndexService:
             "embedding_model": request.embedding_model,
             "embedding_dimensions": request.embedding_dimensions,
             "similarity_metric": "cosine",
+            "semantic_text_strategy": TEMPORAL_SEARCH_TEXT_STRATEGY,
         }
-        fingerprint = temporal_configuration_fingerprint(config)
         indexes = TemporalIndexRepository(self.db)
+        eligible_notes = await indexes.eligible_timeline_notes(session_id)
+        config["note_snapshot_identity"] = timeline_note_snapshot_identity(eligible_notes)
+        fingerprint = temporal_configuration_fingerprint(config)
         jobs = JobRepository(self.db)
         existing = await indexes.by_fingerprint(media_id, fingerprint)
         if existing is not None:
@@ -400,12 +491,23 @@ class TemporalIndexProcessor:
             transcripts = await repository.transcript_segments(transcription.id)
             scenes = await repository.scenes(visual_index.id)
             frames = await repository.frames(visual_index.id)
+            timeline_notes = await repository.eligible_timeline_notes(temporal_index.session_id)
             configuration = temporal_index.configuration
+            configured_strategy = configuration.get("semantic_text_strategy")
+            if configured_strategy == TEMPORAL_SEARCH_TEXT_STRATEGY:
+                actual_snapshot = timeline_note_snapshot_identity(timeline_notes)
+                if actual_snapshot != configuration.get("note_snapshot_identity"):
+                    raise TemporalPrerequisiteError(
+                        "eligible timeline notes changed after temporal index creation"
+                    )
+            else:
+                timeline_notes = []
             definitions = build_temporal_segments(
                 media.duration_seconds,
                 transcripts,
                 scenes,
                 frames,
+                timeline_notes,
                 target_duration_seconds=float(configuration["target_duration_seconds"]),
                 min_duration_seconds=float(configuration["min_duration_seconds"]),
                 max_duration_seconds=float(configuration["max_duration_seconds"]),
@@ -422,8 +524,14 @@ class TemporalIndexProcessor:
                     search_text=definition.search_text,
                     segment_metadata={
                         "silent": silent,
+                        "asr_silent": not bool(definition.text.strip()),
                         "interval_semantics": "[start,end)",
                         "text_ownership": "transcript_start",
+                        "semantic_text_strategy": configured_strategy or "asr_only_v1",
+                        "semantic_source_types": list(definition.semantic_source_types),
+                        "overlapping_timeline_note_ids": [
+                            str(note_id) for note_id in definition.timeline_note_ids
+                        ],
                     },
                     embedding=None,
                     embedding_status="not_applicable" if silent else "pending",
@@ -585,4 +693,19 @@ class TemporalSearchService:
             expected_count=len(queries),
             expected_dimensions=temporal_index.embedding_dimensions,
         )
-        return [await repository.search(temporal_index.id, vector, limit) for vector in vectors]
+        result: list[list[TemporalSearchHit]] = []
+        pool_limit = min(200, max(limit, limit * 3))
+        for query, vector in zip(queries, vectors, strict=True):
+            hits = await repository.search(temporal_index.id, vector, pool_limit)
+            reranked = [
+                TemporalSearchHit(
+                    segment=hit.segment,
+                    score=hybrid_semantic_score(query, hit.segment.search_text, hit.score),
+                )
+                for hit in hits
+            ]
+            reranked.sort(
+                key=lambda hit: (-hit.score, hit.segment.sequence, str(hit.segment.id))
+            )
+            result.append(reranked[:limit])
+        return result

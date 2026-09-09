@@ -245,3 +245,42 @@ async def test_timeline_notes_import_validates_negative_start(client: AsyncClien
     )
     # Pydantic validates at schema level, returns 422 for validation errors
     assert resp.status_code == 422
+
+
+async def test_timeline_text_import_is_idempotent_and_reports_invalid_lines(
+    client: AsyncClient, db
+) -> None:
+    _, session_id = await _create_session_with_media(client, db)
+    payload = {
+        "version": "timeline_notes_text_v1",
+        "provenance": "manual_timeline_import",
+        "content": (
+            "Timeline detalhada\n"
+            "00:00–00:01 — Entrada no local.\n"
+            "00:01-00:02 - O personagem corre.\n"
+            "00:03 — Evento sem range."
+        ),
+    }
+    first = await client.post(
+        f"/sessions/{session_id}/timeline-notes/import-text", json=payload
+    )
+    assert first.status_code == 200
+    assert first.json() == {
+        "parsed_count": 2,
+        "imported_count": 2,
+        "skipped_count": 0,
+        "invalid_lines": [
+            {
+                "line_number": 4,
+                "line": "00:03 — Evento sem range.",
+                "reason": "invalid temporal range",
+            }
+        ],
+        "ignored_line_count": 1,
+    }
+    second = await client.post(
+        f"/sessions/{session_id}/timeline-notes/import-text", json=payload
+    )
+    assert second.status_code == 200
+    assert second.json()["imported_count"] == 0
+    assert second.json()["skipped_count"] == 2

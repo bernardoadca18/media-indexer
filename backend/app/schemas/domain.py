@@ -73,6 +73,28 @@ class TimelineNotesImportResult(BaseModel):
     errors: list[str] | None = None
 
 
+class TimelineNotesTextImportRequest(BaseModel):
+    """Import deterministic ranged observations from human-authored text."""
+
+    version: str = Field(pattern="^timeline_notes_text_v1$")
+    content: str = Field(min_length=1)
+    provenance: str = Field(default="manual_timeline_import", min_length=1, max_length=100)
+
+
+class TimelineTextInvalidLine(BaseModel):
+    line_number: int
+    line: str
+    reason: str
+
+
+class TimelineNotesTextImportResult(BaseModel):
+    parsed_count: int
+    imported_count: int
+    skipped_count: int
+    invalid_lines: list[TimelineTextInvalidLine]
+    ignored_line_count: int
+
+
 class MediaOut(ORMModel):
     id: UUID
     storage_uri: str

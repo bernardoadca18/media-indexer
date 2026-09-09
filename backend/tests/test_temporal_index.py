@@ -10,6 +10,7 @@ from app.models import (
     MediaAsset,
     MediaProject,
     MediaSession,
+    Note,
     SceneSegment,
     TemporalSegmentFrameLink,
     TemporalSegmentSceneLink,
@@ -29,7 +30,24 @@ from app.services.temporal_index import (
     TemporalPrerequisiteError,
     TemporalSearchService,
     build_temporal_segments,
+    hybrid_semantic_score,
+    timeline_note_snapshot_identity,
 )
+
+
+def test_hybrid_score_rewards_lexical_support_in_human_timeline() -> None:
+    query = "táxi perde o controle e capota"
+    relevant = hybrid_semantic_score(
+        query,
+        "Human timeline: o táxi perde estabilidade e capota",
+        0.70,
+    )
+    irrelevant = hybrid_semantic_score(
+        query,
+        "Human timeline: caminhada normal pela avenida",
+        0.74,
+    )
+    assert relevant > irrelevant
 
 
 class FakeEmbeddingProvider:
@@ -265,6 +283,98 @@ async def test_temporal_job_persists_segments_embeddings_and_silence(session_fac
         assert records[0].transcript_segment_ids
         assert records[0].scene_segment_ids
         assert records[0].frame_asset_ids
+
+
+async def test_human_timeline_enriches_asr_and_makes_silence_searchable(session_factory) -> None:
+    provider = FakeEmbeddingProvider()
+    async with session_factory() as db:
+        session, transcription, visual_index, _, _, _ = await seed_ready_prerequisites(db)
+        db.add_all(
+            [
+                Note(
+                    session_id=session.id,
+                    order=1,
+                    raw="Táxi capota na curva",
+                    start_seconds=36.0,
+                    end_seconds=45.0,
+                    description="Táxi capota na curva",
+                    tags=["veículo"],
+                    provenance="manual_timeline_import",
+                ),
+                Note(
+                    session_id=session.id,
+                    order=2,
+                    raw="SUV invade playground",
+                    start_seconds=90.0,
+                    end_seconds=110.0,
+                    description="SUV invade playground",
+                    tags=[],
+                    provenance="manual_timeline_import",
+                ),
+                Note(
+                    session_id=session.id,
+                    order=3,
+                    raw="nota solta que não deve contaminar",
+                    start_seconds=None,
+                    end_seconds=None,
+                    description=None,
+                    tags=None,
+                    provenance=None,
+                ),
+            ]
+        )
+        await db.commit()
+        created = await TemporalIndexService(db, max_attempts=3).ensure(
+            session.id, request(transcription, visual_index)
+        )
+        assert await JobExecutor(db, registry(provider, batch_size=10)).execute(created.job.id)
+        records, _ = await TemporalIndexRepository(db).segments(created.temporal_index.id, 0, 100)
+
+        assert records[1].segment.text == "escape through the gate"
+        assert "escape through the gate" in records[1].segment.search_text
+        assert "Táxi capota na curva veículo" in records[1].segment.search_text
+        assert records[3].segment.text == ""
+        assert "SUV invade playground" in records[3].segment.search_text
+        assert records[3].segment.embedding_status == "completed"
+        assert records[2].segment.embedding_status == "not_applicable"
+        assert "nota solta" not in " ".join(text for group in provider.batches for text in group)
+        assert records[3].segment.segment_metadata["semantic_source_types"] == [
+            "human_timeline"
+        ]
+
+
+async def test_note_snapshot_identity_is_deterministic_and_invalidates_index(session_factory) -> None:
+    async with session_factory() as db:
+        session, transcription, visual_index, _, _, _ = await seed_ready_prerequisites(db)
+        notes = [
+            Note(
+                session_id=session.id,
+                order=order,
+                raw=description,
+                start_seconds=start,
+                end_seconds=end,
+                description=description,
+                tags=["tag"],
+                provenance="manual_timeline_import",
+            )
+            for order, start, end, description in [
+                (2, 50.0, 60.0, "segunda"),
+                (1, 10.0, 20.0, "primeira"),
+            ]
+        ]
+        db.add_all(notes)
+        await db.commit()
+        assert timeline_note_snapshot_identity(notes) == timeline_note_snapshot_identity(
+            list(reversed(notes))
+        )
+        service = TemporalIndexService(db, max_attempts=3)
+        first = await service.ensure(session.id, request(transcription, visual_index))
+        original_snapshot = first.temporal_index.configuration["note_snapshot_identity"]
+        notes[0].description = "segunda alterada"
+        await db.commit()
+        changed = await service.ensure(session.id, request(transcription, visual_index))
+        assert changed.temporal_index.id != first.temporal_index.id
+        assert changed.temporal_index.configuration["note_snapshot_identity"] != original_snapshot
 
 
 async def test_temporal_index_idempotency_config_and_prerequisites(session_factory) -> None:

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     DerivedAsset,
+    Note,
     SceneSegment,
     TemporalIndex,
     TemporalSegment,
@@ -80,6 +81,25 @@ class TemporalIndexRepository:
                 DerivedAsset.timestamp_seconds.is_not(None),
             )
             .order_by(DerivedAsset.timestamp_seconds, DerivedAsset.created_at)
+        )
+        return result.scalars().all()
+
+    async def eligible_timeline_notes(self, session_id: UUID) -> Sequence[Note]:
+        result = await self.db.execute(
+            select(Note)
+            .where(
+                Note.session_id == session_id,
+                Note.start_seconds.is_not(None),
+                Note.end_seconds.is_not(None),
+                Note.end_seconds > Note.start_seconds,
+                func.length(func.trim(Note.description)) > 0,
+            )
+            .order_by(
+                Note.start_seconds,
+                Note.end_seconds,
+                Note.order,
+                Note.id,
+            )
         )
         return result.scalars().all()
 

@@ -28,7 +28,7 @@ from app.services.temporal_index import TemporalPrerequisiteError, TemporalSearc
 
 logger = structlog.get_logger(__name__)
 
-RETRIEVAL_STRATEGY = "semantic_temporal_v1"
+RETRIEVAL_STRATEGY = "semantic_temporal_v2_hybrid_evidence"
 
 
 class RetrievalPrerequisiteError(ValueError):

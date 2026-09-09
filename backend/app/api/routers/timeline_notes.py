@@ -1,14 +1,19 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.api.dependencies import DB
-from app.models import MediaSession
+from app.models import MediaAsset, MediaSession
 from app.schemas.domain import (
     TimelineNotesImportRequest,
     TimelineNotesImportResult,
+    TimelineNotesTextImportRequest,
+    TimelineNotesTextImportResult,
+    TimelineTextInvalidLine,
 )
+from app.services.timeline_note_text_parser import parse_timeline_text
+from app.services.timeline_notes_import import TimelineNotesImporter
 
 router = APIRouter(tags=["timeline-notes"])
 
@@ -31,97 +36,64 @@ async def import_timeline_notes(
     Idempotency: Duplicates are detected by matching (session_id, start_seconds, end_seconds, normalized_description).
     This allows the same temporal range to have different descriptions (different observations).
     """
-    from sqlalchemy.orm import selectinload
-
-    from app.models.entities import Note
-
-    # Load session with media for duration validation (eager load to avoid MissingGreenlet)
-    result = await db.execute(
-        select(MediaSession)
-        .where(MediaSession.id == session_id)
-        .options(selectinload(MediaSession.media))
+    try:
+        summary = await TimelineNotesImporter(db).import_observations(
+            session_id,
+            request.observations,
+            provenance=request.provenance or "manual_import",
+        )
+    except LookupError:
+        raise HTTPException(404, "Session not found") from None
+    await db.commit()
+    return TimelineNotesImportResult(
+        imported_count=summary.imported_count,
+        skipped_count=summary.skipped_count,
+        errors=list(summary.errors) or None,
     )
-    session = result.scalar_one_or_none()
+
+
+@router.post(
+    "/sessions/{session_id}/timeline-notes/import-text",
+    response_model=TimelineNotesTextImportResult,
+)
+async def import_timeline_note_text(
+    session_id: UUID,
+    request: TimelineNotesTextImportRequest,
+    db: DB,
+) -> TimelineNotesTextImportResult:
+    session = await db.get(MediaSession, session_id)
     if session is None:
         raise HTTPException(404, "Session not found")
-
-    # Get media duration for validation
-    media_duration = session.media.duration_seconds if session.media else None
-
-    imported_count = 0
-    skipped_count = 0
-    errors: list[str] = []
-
-    # Get the max order for new notes
-    order_result = await db.execute(
-        select(Note.order)
-        .where(Note.session_id == session_id)
-        .order_by(Note.order.desc())
-        .limit(1)
+    duration = await db.scalar(
+        select(MediaAsset.duration_seconds)
+        .join(MediaSession, MediaSession.media_id == MediaAsset.id)
+        .where(MediaSession.id == session_id)
     )
-    max_order = order_result.scalar() or 0
-
-    # Normalize provenance - default to manual_import if not specified
-    provenance = request.provenance or "manual_import"
-
-    for i, obs in enumerate(request.observations):
-        # Validate range constraints
-        if obs.start_seconds < 0:
-            errors.append(
-                f"Observation {i}: start_seconds must be non-negative (got {obs.start_seconds})"
-            )
-            continue
-
-        if obs.end_seconds <= obs.start_seconds:
-            errors.append(
-                f"Observation {i}: end_seconds must be greater than start_seconds "
-                f"(got start={obs.start_seconds}, end={obs.end_seconds})"
-            )
-            continue
-
-        # Validate against media duration if available
-        if media_duration is not None:
-            if obs.end_seconds > media_duration:
-                errors.append(
-                    f"Observation {i}: end_seconds ({obs.end_seconds}) exceeds media duration ({media_duration})"
-                )
-                continue
-
-        # Normalize description for identity check
-        normalized_description = obs.description.strip().lower()
-
-        # Check for existing note with same identity (session, range, description)
-        # This allows same range with different descriptions (different observations)
-        existing_result = await db.execute(
-            select(Note)
-            .where(Note.session_id == session_id)
-            .where(Note.start_seconds == obs.start_seconds)
-            .where(Note.end_seconds == obs.end_seconds)
-            .where(func.lower(Note.description) == normalized_description)
+    # The importer performs authoritative media-duration validation. Parsing also
+    # reports line-level format/range failures; it never guesses missing ranges.
+    parsed = parse_timeline_text(request.content, media_duration_seconds=duration)
+    summary = await TimelineNotesImporter(db).import_observations(
+        session_id,
+        list(parsed.observations),
+        provenance=request.provenance,
+    )
+    await db.commit()
+    invalid = [
+        TimelineTextInvalidLine(
+            line_number=item.line_number,
+            line=item.line,
+            reason=item.reason,
         )
-        if existing_result.scalar_one_or_none() is not None:
-            skipped_count += 1
-            continue
-
-        # Create new note with provenance
-        max_order += 1
-        note = Note(
-            session_id=session_id,
-            order=max_order,
-            raw=obs.description,  # Store description in raw for now
-            start_seconds=obs.start_seconds,
-            end_seconds=obs.end_seconds,
-            description=obs.description,
-            tags=obs.tags,
-            provenance=provenance,
-        )
-        db.add(note)
-        imported_count += 1
-
-    await db.flush()
-
-    return TimelineNotesImportResult(
-        imported_count=imported_count,
-        skipped_count=skipped_count,
-        errors=errors if errors else None,
+        for item in parsed.invalid_lines
+    ]
+    invalid.extend(
+        TimelineTextInvalidLine(line_number=0, line="", reason=error)
+        for error in summary.errors
+    )
+    return TimelineNotesTextImportResult(
+        parsed_count=len(parsed.observations),
+        imported_count=summary.imported_count,
+        skipped_count=summary.skipped_count,
+        invalid_lines=invalid,
+        ignored_line_count=parsed.ignored_line_count,
     )

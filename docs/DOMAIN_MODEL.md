@@ -61,7 +61,7 @@ pending/processing/completed/failed state and cannot demote a ready MediaSession
   embedding provider/model/dimensions and the canonical configuration
   fingerprint.
 - TemporalSegment is the ordered retrieval unit. It records a positive temporal
-  range, deterministic ASR text/search_text, metadata, embedding lifecycle and
+  range, transcript-derived `text`, strategy-derived `search_text`, metadata, embedding lifecycle and
   an optional vector(1024).
 - TemporalSegmentTranscriptLink, TemporalSegmentSceneLink and
   TemporalSegmentFrameLink are normalized many-to-many evidence associations.
@@ -73,13 +73,16 @@ pending/processing/completed/failed state and cannot demote a ready MediaSession
 
 TemporalIndex identity includes media, both prerequisite IDs, segmentation
 durations, interval/text ownership rules, embedding provider/model/dimensions
-and similarity metric. Equivalent requests reuse the aggregate and job;
+and similarity metric. Enriched strategies also include the deterministic
+eligible-timeline-note snapshot identity. Equivalent requests reuse the aggregate and job;
 materially different configurations coexist.
 
-The timeline is fully covered even when no speech exists. A silent
-TemporalSegment has text/search_text empty, embedding NULL and
-embedding_status=not_applicable. It is valid evidence for future temporal or
-multimodal expansion, but does not participate in textual vector similarity.
+The timeline is fully covered even when no speech exists. A segment with no ASR
+and no eligible human timeline evidence has empty text/search_text, embedding
+NULL and `embedding_status=not_applicable`. An ASR-silent segment with an
+overlapping structured human description keeps `text` empty while receiving
+derived search_text and an embedding. Metadata exposes honest source types and
+overlapping note IDs; it does not claim multimodal confirmation.
 
 Text embeddings live directly on TemporalSegment because their immutable
 provider/model/dimension provenance belongs to TemporalIndex. They are derived

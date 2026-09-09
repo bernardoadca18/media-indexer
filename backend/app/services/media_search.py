@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MediaAsset, MediaSession
@@ -49,6 +50,7 @@ from app.services.candidate_retrieval import (
     build_candidate_definitions,
 )
 from app.services.embedding_provider import EmbeddingProvider
+from app.services.temporal_index import hybrid_semantic_score
 from app.services.temporal_index_resolution import (
     ResolvedTemporalIndex,
     TemporalIndexResolutionError,
@@ -57,7 +59,7 @@ from app.services.temporal_index_resolution import (
 
 logger = structlog.get_logger(__name__)
 
-MEDIA_SEARCH_STRATEGY = "media_search_v1"
+MEDIA_SEARCH_STRATEGY = "media_search_v4_hybrid_evidence"
 
 
 class MediaSearchError(ValueError):
@@ -546,7 +548,16 @@ class MediaSearchService:
         from app.repositories.temporal_index import TemporalIndexRepository
 
         repository = TemporalIndexRepository(self.db)
-        hits = await repository.search(temporal_index.id, query_embedding, limit=30)
+        raw_hits = await repository.search(temporal_index.id, query_embedding, limit=90)
+        hits = [
+            type(hit)(
+                segment=hit.segment,
+                score=hybrid_semantic_score(query, hit.segment.search_text, hit.score),
+            )
+            for hit in raw_hits
+        ]
+        hits.sort(key=lambda hit: (-hit.score, hit.segment.sequence, str(hit.segment.id)))
+        hits = hits[:30]
 
         # Build candidate definitions from hits
         config = CandidateRetrievalConfig(
@@ -587,6 +598,11 @@ class MediaSearchService:
         results: list[MediaSearchResult] = []
 
         for rank, definition in enumerate(definitions, start=1):
+            semantic_provenance = await self._get_semantic_provenance(
+                resolved.temporal_index.id,
+                definition.start_seconds,
+                definition.end_seconds,
+            )
             result = MediaSearchResult(
                 session_id=session.id,
                 media_id=media.id,
@@ -611,11 +627,56 @@ class MediaSearchService:
                     "score_components": definition.score_components,
                     "cluster_start_seconds": definition.cluster_start_seconds,
                     "cluster_end_seconds": definition.cluster_end_seconds,
+                    **semantic_provenance,
                 },
             )
             results.append(result)
 
         return results
+
+    async def _get_semantic_provenance(
+        self,
+        temporal_index_id: UUID,
+        start_seconds: float,
+        end_seconds: float,
+    ) -> dict[str, object]:
+        """Expose derived evidence provenance without claiming validated alignment."""
+        from app.models import TemporalSegment
+
+        rows = await self.db.execute(
+            select(TemporalSegment.segment_metadata)
+            .where(
+                TemporalSegment.temporal_index_id == temporal_index_id,
+                TemporalSegment.end_seconds > start_seconds,
+                TemporalSegment.start_seconds < end_seconds,
+            )
+            .order_by(TemporalSegment.sequence)
+        )
+        source_types: set[str] = set()
+        note_ids: set[str] = set()
+        strategy = "asr_only_v1"
+        for metadata in rows.scalars().all():
+            if not isinstance(metadata, dict):
+                continue
+            strategy = str(metadata.get("semantic_text_strategy") or strategy)
+            source_types.update(str(value) for value in metadata.get("semantic_source_types", []))
+            note_ids.update(
+                str(value) for value in metadata.get("overlapping_timeline_note_ids", [])
+            )
+        if source_types == {"asr"}:
+            support = "asr_only"
+        elif source_types == {"human_timeline"}:
+            support = "human_timeline"
+        elif source_types.issuperset({"asr", "human_timeline"}):
+            support = "asr_and_human_timeline"
+        else:
+            support = "none"
+        return {
+            "semantic_text_strategy": strategy,
+            "semantic_source_types": sorted(source_types),
+            "semantic_support": support,
+            "overlapping_timeline_note_ids": sorted(note_ids),
+        }
 
     async def _get_transcript_preview(
         self,

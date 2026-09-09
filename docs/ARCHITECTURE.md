@@ -104,8 +104,24 @@ duplicate text, while overlap associations still retain all evidence.
 TemporalSegmentTranscriptLink, TemporalSegmentSceneLink and
 TemporalSegmentFrameLink make provenance queryable without parsing JSON.
 Representative-frame membership is [start,end); the last segment explicitly
-owns points at the exact media end. Silent segments keep empty text and
-embedding_status=not_applicable.
+owns points at the exact media end. `TemporalSegment.text` remains
+transcript-derived display/evidence. Versioned search semantics may compose
+overlapping structured human timeline descriptions and compact tags into
+`search_text`; this never mutates Note.raw or turns a human observation into
+ASR. Only notes with a valid `[start,end)` range and non-empty description are
+eligible. A segment with neither source remains `not_applicable`, while an
+ASR-silent segment with human timeline evidence is embedded and searchable.
+
+The deterministic text importer accepts only explicit `MM:SS–MM:SS` or
+`HH:MM:SS–HH:MM:SS` lines through
+`POST /sessions/{id}/timeline-notes/import-text`. Headings are ignored and
+ambiguous temporal lines are reported rather than guessed. It shares the
+structured importer's idempotency policy and coexists with original raw notes.
+
+Each enriched TemporalIndex configuration contains its semantic-text strategy
+and a SHA-256 snapshot over deterministically ordered eligible note ID, range,
+normalized description/tags and provenance. A note change creates a new
+derivation; completed historical indexes are never rewritten.
 
 EmbeddingProvider is intentionally embedding-specific. The production adapter
 sends arrays of non-empty search_text values directly to Ollama's `/api/embed`
@@ -116,8 +132,10 @@ requires a migration.
 
 Migration 0004 enables pgvector and stores embeddings directly on
 TemporalSegment because provider/model/dimension are immutable provenance on
-the owning TemporalIndex. Exact cosine search is scoped by temporal_index_id and
-returns 1 - cosine distance, so higher scores are better. No approximate index
+the owning TemporalIndex. Exact cosine search is scoped by temporal_index_id;
+query retrieval then applies a small deterministic lexical-evidence component
+over the same derived search text, with embeddings remaining the primary
+signal. Higher scores are better. No approximate index
 is created yet: exact search has perfect recall and is adequate for the
 expected initial thousands to tens of thousands of segments.
 
