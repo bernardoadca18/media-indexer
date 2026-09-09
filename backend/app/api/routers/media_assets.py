@@ -38,7 +38,7 @@ async def get_media_asset_content(media_id: UUID, db: DB, storage: StorageDep) -
     """Stream only a DB-owned MediaAsset resolved by the configured managed storage."""
     item = await _managed_asset(media_id, db)
     try:
-        path = storage.resolve(item.storage_uri)
+        path = storage.resolve_any(item.storage_uri)
     except ValueError as exc:
         raise HTTPException(404, "Managed media content unavailable") from exc
     if not path.is_file():

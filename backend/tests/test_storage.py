@@ -61,6 +61,22 @@ def test_storage_rejects_escaping_uri(tmp_path: Path) -> None:
         storage.resolve("local://../../outside")
 
 
+def test_resolve_any_supports_primary(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    expected = tmp_path / "managed" / "source.mp4"
+    expected.parent.mkdir()
+    expected.write_bytes(b"primary")
+
+    assert storage.resolve_any("local://managed/source.mp4") == expected
+
+
+def test_resolve_any_rejects_escaping_primary(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+
+    with pytest.raises(ValueError, match="escapes root"):
+        storage.resolve_any("local://../../outside")
+
+
 async def test_hdd_storage_saves_to_secondary_location(tmp_path: Path) -> None:
     primary = tmp_path / "primary"
     hdd = tmp_path / "hdd"
@@ -112,6 +128,30 @@ def test_hdd_storage_rejects_escaping_uri(tmp_path: Path) -> None:
     storage = LocalStorage(primary, root_hdd=hdd)
     with pytest.raises(ValueError, match="escapes root"):
         storage.resolve_hdd("local-hdd://../../outside")
+
+
+def test_resolve_any_supports_hdd(tmp_path: Path) -> None:
+    primary = tmp_path / "primary"
+    hdd = tmp_path / "hdd"
+    primary.mkdir()
+    hdd.mkdir()
+    expected = hdd / "managed" / "source.mp4"
+    expected.parent.mkdir()
+    expected.write_bytes(b"hdd")
+    storage = LocalStorage(primary, root_hdd=hdd)
+
+    assert storage.resolve_any("local-hdd://managed/source.mp4") == expected
+
+
+def test_resolve_any_rejects_escaping_hdd(tmp_path: Path) -> None:
+    primary = tmp_path / "primary"
+    hdd = tmp_path / "hdd"
+    primary.mkdir()
+    hdd.mkdir()
+    storage = LocalStorage(primary, root_hdd=hdd)
+
+    with pytest.raises(ValueError, match="escapes root"):
+        storage.resolve_any("local-hdd://../../outside")
 
 
 async def test_hdd_storage_falls_back_to_primary_when_not_configured(tmp_path: Path) -> None:

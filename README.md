@@ -31,11 +31,17 @@ exactly. The response is the updated SessionOut with `notes_filename`,
 
 ## HDD storage for large sources
 
-When `STORAGE_HDD_ROOT` is configured and an upload exceeds
-`STORAGE_HDD_THRESHOLD_BYTES`, the source is written to the secondary HDD
-location and referenced by a `local-hdd://` URI instead of the primary
-`local://` storage. `STORAGE_HDD_ROOT` is optional; when unset, all sources use
-the primary storage regardless of size.
+`local://` identifies content in primary managed storage (`STORAGE_ROOT` inside
+the container), while `local-hdd://` identifies content in secondary managed
+HDD storage (`STORAGE_ROOT_HDD`). When HDD storage is configured and an upload
+exceeds `STORAGE_HDD_THRESHOLD_BYTES`, the source is written to the secondary
+location. Otherwise it remains in primary storage.
+
+`MEDIA_INDEXER_STORAGE_HOST_PATH` configures the host-side primary storage bind
+mount. `MEDIA_INDEXER_HDD_HOST_PATH` configures the optional host-side HDD bind
+mount; the integrated container always sees that HDD at `/data/media-hdd`.
+Host paths and storage URIs are internal details and are not exposed to
+consumers.
 
 ## Desenvolvimento
 
@@ -82,8 +88,9 @@ Stage 16 Video Composer resolves original gameplay through read-only logical-ID 
 
 Metadata includes the immutable SHA-256, byte size and technical media fields, but never exposes
 `storage_uri`, probe blobs or host paths. The content endpoint resolves only a database-owned
-MediaAsset through configured managed storage and supports HTTP byte ranges. Callers cannot supply
-paths or arbitrary URLs. No schema migration was required for this projection.
+MediaAsset from either `local://` primary storage or `local-hdd://` secondary storage and supports
+HTTP byte ranges. Callers use `media_id`; they cannot supply paths or arbitrary URLs. No schema
+migration was required for this projection.
 
 ## Timestamped transcription
 
