@@ -13,7 +13,7 @@ from app.models import (
 )
 from app.repositories.temporal_index import TemporalIndexRepository, TemporalSearchHit
 from app.services.jobs import JobExecutor, ProcessorRegistry
-from app.services.temporal_index import TemporalIndexProcessor
+from app.services.temporal_index import TemporalIndexProcessor, hybrid_semantic_score
 
 
 class ApiEmbeddingProvider:
@@ -214,7 +214,9 @@ async def test_temporal_index_api_idempotency_pagination_and_search(
             "temporal_segment_id": str(first_segment.id),
             "start_seconds": first_segment.start_seconds,
             "end_seconds": first_segment.end_seconds,
-            "score": 0.91,
+            "score": hybrid_semantic_score(
+                "defend the lab", first_segment.search_text, 0.91
+            ),
         }
     ]
     assert provider.calls[-1] == ["defend the lab"]
