@@ -10,6 +10,8 @@ from app.core.database import AsyncSessionLocal
 from app.services.alignment import AlignmentProcessor
 from app.services.alignment_provider import NinerouterMultimodalAlignmentProvider
 from app.services.embedding_provider import ollama_embedding_provider
+from app.services.image_semantic_index import ImageSemanticIndexProcessor
+from app.services.image_semantic_provider import NinerouterImageSemanticProvider
 from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import FFprobe
 from app.services.processing import InitialIndexProcessor
@@ -37,6 +39,9 @@ def build_default_registry() -> ProcessorRegistry:
     frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
     embedding_provider = ollama_embedding_provider
     alignment_provider = NinerouterMultimodalAlignmentProvider(settings.alignment_timeout_seconds)
+    image_semantic_provider = NinerouterImageSemanticProvider(
+        settings.image_vision_timeout_seconds
+    )
     registry = ProcessorRegistry()
     registry.register(
         "initial_index",
@@ -67,6 +72,15 @@ def build_default_registry() -> ProcessorRegistry:
             db,
             embedding_provider,
             settings.embedding_batch_size,
+        ),
+    )
+    registry.register(
+        "image_semantic_index",
+        lambda db: ImageSemanticIndexProcessor(
+            db,
+            storage,
+            image_semantic_provider,
+            embedding_provider,
         ),
     )
     registry.register(

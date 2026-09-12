@@ -11,6 +11,7 @@ from app.models import (
     AlignmentRun,
     AlignmentSubject,
     CandidateAlignment,
+    ImageSemanticIndex,
     MediaSession,
     ProcessingJob,
     TemporalIndex,
@@ -89,9 +90,30 @@ class JobExecutor:
         except Exception as exc:
             await self.db.rollback()
             job = await JobRepository(self.db).get(job_id)
+            provider_route = None
             if job is not None:
+                if job.image_semantic_index_id is not None:
+                    image_index = await self.db.get(
+                        ImageSemanticIndex, job.image_semantic_index_id
+                    )
+                    provider_route = image_index.vision_model if image_index is not None else None
                 await self._fail(job, str(exc)[:4000])
-            logger.exception("job_failed", job_id=str(job_id))
+            logger.exception(
+                "job_failed",
+                job_id=str(job_id),
+                job_type=job.job_type if job is not None else None,
+                project_id=str(job.project_id) if job is not None else None,
+                media_id=str(job.media_id) if job is not None else None,
+                image_semantic_index_id=(
+                    str(job.image_semantic_index_id)
+                    if job is not None and job.image_semantic_index_id is not None
+                    else None
+                ),
+                stage=job.stage if job is not None else None,
+                attempt=job.attempt_count if job is not None else None,
+                provider_route=provider_route,
+                failure_category=type(exc).__name__,
+            )
             return False
 
     async def heartbeat(self, job_id: UUID) -> bool:
@@ -140,6 +162,14 @@ class JobExecutor:
                     if alignment_run is not None:
                         alignment_run.status = "pending"
                         alignment_run.completed_at = None
+                elif job.image_semantic_index_id is not None:
+                    image_index = await self.db.get(
+                        ImageSemanticIndex, job.image_semantic_index_id
+                    )
+                    if image_index is not None:
+                        image_index.status = "pending"
+                        image_index.error = None
+                        image_index.completed_at = None
             recovered.append(job.id)
         await self.db.commit()
         return recovered
@@ -187,8 +217,18 @@ class JobExecutor:
                     )
                     .values(status="failed")
                 )
+        elif job.image_semantic_index_id is not None:
+            image_index = await self.db.get(ImageSemanticIndex, job.image_semantic_index_id)
+            if image_index is not None:
+                image_index.status = "failed"
+                image_index.error = error
+                image_index.completed_at = datetime.now(UTC)
         elif job.job_type == "initial_index":
-            session = await self.db.get(MediaSession, job.session_id)
+            session = (
+                await self.db.get(MediaSession, job.session_id)
+                if job.session_id is not None
+                else None
+            )
             if session is not None:
                 session.status = "failed"
         if commit:

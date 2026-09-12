@@ -68,6 +68,15 @@ Stage 16 source materialization is supported through read-only MediaAsset metada
 Keep lookup restricted to logical IDs and managed storage resolution. Metadata must not expose
 storage_uri or host paths; content streaming must never accept a caller-supplied path or URL.
 
+First-class static image memory is now implemented. MediaAsset is the immutable source binary
+identity and media_kind distinguishes image from video. Keep operator-declared
+MediaAssetProvenance separate from model observation. ImageSemanticIndex is a non-temporal,
+versioned durable derivation that uses the provider-neutral 9Router neovids-vision route, then
+direct Ollama text embeddings. Never create a MediaSession, SceneSegment, DerivedAsset or fake
+time range for a source image. Image Search is project-scoped and returns MediaAsset IDs/content
+URLs without vectors, storage URIs, host paths or temporal coordinates. Tests use fake providers;
+real image analysis is an explicit one-image smoke only.
+
 The next roadmap phase is Integration with Ideas Hub / game_analysis workflow.
 Do not add editorial ranking, script generation, composition or rendering in
 advance.

@@ -9,6 +9,8 @@ from app.api.dependencies import DB
 from app.api.routers import (
     alignments,
     candidate_retrieval,
+    image_search,
+    images,
     jobs,
     media_assets,
     media_search,
@@ -57,6 +59,8 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(visual_indexes.router)
     application.include_router(temporal_indexes.router)
     application.include_router(candidate_retrieval.router)
+    application.include_router(images.router)
+    application.include_router(image_search.router)
     application.include_router(alignments.router)
     application.include_router(jobs.router)
     application.include_router(media_assets.router)

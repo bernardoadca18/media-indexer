@@ -1,7 +1,8 @@
 # Domain model
 
 - MediaProject groups sessions.
-- MediaAsset owns logical URI, filename, checksum, size and probe metadata.
+- MediaAsset owns logical URI, explicit media kind, filename, checksum, size and
+  technical metadata for both video and source static images.
 - MediaSession binds a project, primary media and the exact note document.
 - Note is an ordered immutable unit parsed from that document.
 - ProcessingJob persists status, stage, progress and error.
@@ -9,6 +10,37 @@
 Consumers use media_id plus future temporal coordinates and never interpret
 storage_uri. A repeated project-scoped Idempotency-Key returns the existing
 session and job.
+
+## Source static images
+
+- `MediaAsset(media_kind=image)` is the original source image. It owns managed
+  bytes, detected MIME/format, dimensions, size and SHA-256. Duration, codecs,
+  FPS and temporal relationships remain null/absent.
+- `MediaAssetProvenance` is the immutable one-to-one operator declaration. It
+  records source owner/class, asset class, collection, game, bounded extensible
+  metadata and a canonical fingerprint. Its filter columns are indexed.
+- `ImageSemanticIndex` is one versioned vision-description and text-embedding
+  execution. It owns lifecycle/error, configuration fingerprint, structured
+  observation, deterministic canonical text, provider metadata and vector.
+- `ProcessingJob` may point to ImageSemanticIndex with `session_id=NULL`. That
+  null has one precise meaning: a non-session image job. Existing temporal jobs
+  continue to require and receive a real session ID in their services.
+
+Project plus SHA-256 is the source-image idempotency boundary. The partial
+unique constraint does not alter video deduplication semantics. Equivalent
+provenance reuses the existing source; a mismatch is a conflict and no field is
+overwritten. The original filename from the first ingest is retained.
+
+ImageSemanticIndex uniqueness is `(media_id, configuration_fingerprint)`.
+Fingerprint material includes strategy, prompt/result/canonical-text versions,
+vision provider and route alias, provenance fingerprint, and embedding provider,
+exact model tag and dimensions. Structured visual observations are distinct
+from declared identity. Canonical text labels both sources before embedding.
+
+The vector is `vector(1024)` and is never returned by the API. A completed index
+must have valid structured output, canonical text and a vector. Failed analysis
+does not invalidate or delete the MediaAsset. No image entity has start/end,
+duration, session, scene, frame or timeline semantics.
 
 ## Transcription
 

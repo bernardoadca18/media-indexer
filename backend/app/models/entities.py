@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,13 +35,25 @@ class MediaProject(Base, UUIDPrimaryKey, TimestampMixin):
 
 class MediaAsset(Base, UUIDPrimaryKey):
     __tablename__ = "media_assets"
-    __table_args__ = (Index("ix_media_assets_project_sha256", "project_id", "sha256"),)
+    __table_args__ = (
+        CheckConstraint("media_kind IN ('video', 'image')", name="ck_media_assets_kind"),
+        Index("ix_media_assets_project_sha256", "project_id", "sha256"),
+        Index(
+            "uq_media_assets_project_image_sha256",
+            "project_id",
+            "sha256",
+            unique=True,
+            postgresql_where=text("media_kind = 'image'"),
+            sqlite_where=text("media_kind = 'image'"),
+        ),
+    )
     project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
     storage_uri: Mapped[str] = mapped_column(String(1000), unique=True)
     original_filename: Mapped[str] = mapped_column(String(500))
     content_type: Mapped[str | None] = mapped_column(String(200))
     byte_size: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
+    media_kind: Mapped[str] = mapped_column(String(30), default="video")
     duration_seconds: Mapped[float | None] = mapped_column(Float)
     format_name: Mapped[str | None] = mapped_column(String(200))
     video_codec: Mapped[str | None] = mapped_column(String(100))
@@ -49,6 +62,29 @@ class MediaAsset(Base, UUIDPrimaryKey):
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
     probe_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MediaAssetProvenance(Base, UUIDPrimaryKey):
+    """Immutable operator-declared provenance for a source image."""
+
+    __tablename__ = "media_asset_provenance"
+    __table_args__ = (
+        UniqueConstraint("media_id", name="uq_media_asset_provenance_media"),
+        Index("ix_media_asset_provenance_project_owner", "project_id", "source_owner"),
+        Index("ix_media_asset_provenance_project_class", "project_id", "asset_class"),
+        Index("ix_media_asset_provenance_project_collection", "project_id", "collection"),
+        Index("ix_media_asset_provenance_project_game", "project_id", "game"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    source_owner: Mapped[str | None] = mapped_column(String(200))
+    source_class: Mapped[str | None] = mapped_column(String(100))
+    asset_class: Mapped[str | None] = mapped_column(String(100))
+    collection: Mapped[str | None] = mapped_column(String(200))
+    game: Mapped[str | None] = mapped_column(String(200))
+    declared_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    fingerprint: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -231,6 +267,51 @@ class DerivedAsset(Base, UUIDPrimaryKey):
 
 
 EMBEDDING_VECTOR_DIMENSIONS = 1024
+
+
+class ImageSemanticIndex(Base, UUIDPrimaryKey, TimestampMixin):
+    """Versioned non-temporal semantic analysis for a source static image."""
+
+    __tablename__ = "image_semantic_indexes"
+    __table_args__ = (
+        UniqueConstraint(
+            "media_id", "configuration_fingerprint", name="uq_image_index_media_config"
+        ),
+        CheckConstraint(
+            "embedding_dimensions = 1024", name="ck_image_index_embedding_dimensions"
+        ),
+        CheckConstraint(
+            "status != 'completed' OR "
+            "(semantic_result IS NOT NULL AND canonical_search_text IS NOT NULL "
+            "AND embedding IS NOT NULL)",
+            name="ck_image_index_completed_outputs",
+        ),
+        Index("ix_image_indexes_project_status", "project_id", "status"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    strategy: Mapped[str] = mapped_column(String(100))
+    prompt_version: Mapped[str] = mapped_column(String(50))
+    result_schema_version: Mapped[str] = mapped_column(String(50))
+    canonical_text_version: Mapped[str] = mapped_column(String(50))
+    vision_provider: Mapped[str] = mapped_column(String(100))
+    vision_model: Mapped[str] = mapped_column(String(200))
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSON)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64))
+    semantic_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    canonical_search_text: Mapped[str | None] = mapped_column(Text)
+    embedding_provider: Mapped[str] = mapped_column(String(100))
+    embedding_model: Mapped[str] = mapped_column(String(200))
+    embedding_dimensions: Mapped[int] = mapped_column(Integer)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_VECTOR_DIMENSIONS).with_variant(JSON(), "sqlite")
+    )
+    provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    usage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TemporalIndex(Base, UUIDPrimaryKey, TimestampMixin):
@@ -541,9 +622,21 @@ class CandidateAlignment(Base, UUIDPrimaryKey):
 
 class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
-    __table_args__ = (Index("ix_processing_jobs_status_created", "status", "created_at"),)
+    __table_args__ = (
+        CheckConstraint(
+            "session_id IS NOT NULL OR image_semantic_index_id IS NOT NULL",
+            name="ck_processing_job_session_or_image",
+        ),
+        CheckConstraint(
+            "image_semantic_index_id IS NULL OR session_id IS NULL",
+            name="ck_processing_job_image_without_session",
+        ),
+        Index("ix_processing_jobs_status_created", "status", "created_at"),
+    )
     project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
-    session_id: Mapped[UUID] = mapped_column(ForeignKey("media_sessions.id", ondelete="CASCADE"))
+    session_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("media_sessions.id", ondelete="CASCADE")
+    )
     media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
     transcription_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("transcriptions.id", ondelete="CASCADE")
@@ -556,6 +649,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     )
     alignment_run_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("alignment_runs.id", ondelete="CASCADE")
+    )
+    image_semantic_index_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("image_semantic_indexes.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")

@@ -276,6 +276,8 @@ class VisualIndexProcessor:
     async def run(self, job: ProcessingJob) -> None:
         if job.visual_index_id is None:
             raise ValueError("visual index job has no visual_index_id")
+        if job.session_id is None:
+            raise ValueError("visual index job has no session_id")
         job_id = job.id
         visual_index_id = job.visual_index_id
         project_id = job.project_id

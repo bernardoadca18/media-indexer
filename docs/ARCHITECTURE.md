@@ -1,8 +1,8 @@
 # Architecture
 
-The API registers a project/session (video plus raw notes) and streams the source
-through a storage port. A persistent job is queued; one in-process worker invokes
-ffprobe outside the request and persists results or errors.
+The API registers project/session video sources and first-class project image
+sources through the same storage port. Long processing is represented by a
+persistent job and executed by one in-process worker outside HTTP requests.
 
 The database row is the durable job source of truth; the queue only wakes the
 worker. Pending jobs are re-enqueued on startup. UUIDs and storage URIs prevent
@@ -11,6 +11,61 @@ reinforced by database triggers. SHA-256 supports future deduplication.
 
 Known limits: local storage and one API replica; no quotas, auth, remote storage,
 or distributed leases. Vector search uses PostgreSQL with the pgvector extension.
+
+## First-class static image memory
+
+`MediaAsset` remains the single source-binary identity. `media_kind` explicitly
+distinguishes `video` from `image`; historical rows are backfilled as video.
+Static source images do not create MediaSession, DerivedAsset, SceneSegment,
+TemporalSegment, duration, frame, or timestamp records. Their managed layout is:
+
+    projects/{project_id}/media/{media_id}/source/{sanitized_filename}
+
+`POST /projects/{project_id}/images` streams at most `IMAGE_MAX_BYTES`, computes
+SHA-256 while writing, rejects namespace symlink escapes, and validates the full
+JPEG/PNG/WebP payload with Pillow. Detected format/MIME and positive dimensions
+must match the declared MIME and stay within `IMAGE_MAX_PIXELS`. Animated and
+corrupt inputs fail before any database identity is committed.
+
+The image idempotency boundary is project plus content checksum. A partial
+unique index applies only to source images, so historical video identities are
+not rewritten. The first accepted filename remains the immutable identity
+label. An equivalent checksum and equivalent provenance reuses the MediaAsset;
+different provenance returns a conflict. `MediaAssetProvenance` is a separate,
+database-immutable operator declaration with indexed source owner/class, asset
+class, collection and game fields plus bounded extensible metadata. It is never
+merged into model observation.
+
+`ImageSemanticIndex` is the independent non-temporal derived aggregate. Its
+fingerprint includes strategy, prompt/schema/canonical-text versions, the
+immutable provenance snapshot, provider-neutral vision route and exact text
+embedding compatibility identity. Equivalent requests reuse an existing index
+and job; a material configuration change creates a coexisting version.
+
+The `image_semantic_index` worker sends exactly one image to the OpenAI-compatible
+9Router route configured as `neovids-vision`. The factual prompt forbids guessed
+proper names/locations and validates a bounded JSON schema. Base64 exists only
+inside that outbound request. Structured visual observation, provider metadata
+and usage are persisted separately from technical metadata and declared
+provenance; hidden reasoning is neither requested nor stored.
+
+Canonical search text is deterministically composed and labeled from safe
+declared scalar metadata plus structured visual observations. Arbitrary JSON is
+not embedded. Direct Ollama produces the text vector using the exact configured
+model tag and 1024 dimensions. Completion requires both valid structured output
+and a valid vector. An HNSW cosine index supports project retrieval.
+
+Caption output is checkpointed before embedding. If embedding fails, durable
+retry resumes from that checkpoint without another vision call. Provider/schema
+failure remains failed and never becomes an empty caption. Either failure leaves
+the original MediaAsset valid and materializable.
+
+`POST /image-search/projects/{project_id}` groups completed indexes by embedding
+provider/model/dimensions and embeds the query once per compatibility group.
+Filtering happens on declared provenance before cosine ranking. Results are
+deduplicated by MediaAsset, contain semantic/index provenance and a canonical
+content URL, and never contain temporal coordinates. Existing footage Media
+Search and Candidate Retrieval remain unchanged.
 
 ## Job execution and recovery
 

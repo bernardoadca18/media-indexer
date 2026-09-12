@@ -6,7 +6,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import MediaAsset, MediaProject, MediaSession, ProcessingJob
+from app.models import (
+    MediaAsset,
+    MediaAssetProvenance,
+    MediaProject,
+    MediaSession,
+    ProcessingJob,
+)
 
 
 class MediaAssetRepository:
@@ -15,6 +21,22 @@ class MediaAssetRepository:
 
     async def get(self, media_id: UUID) -> MediaAsset | None:
         return await self.db.get(MediaAsset, media_id)
+
+    async def image_by_checksum(self, project_id: UUID, sha256: str) -> MediaAsset | None:
+        result = await self.db.execute(
+            select(MediaAsset).where(
+                MediaAsset.project_id == project_id,
+                MediaAsset.media_kind == "image",
+                MediaAsset.sha256 == sha256,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def provenance(self, media_id: UUID) -> MediaAssetProvenance | None:
+        result = await self.db.execute(
+            select(MediaAssetProvenance).where(MediaAssetProvenance.media_id == media_id)
+        )
+        return result.scalar_one_or_none()
 
 
 class ProjectRepository:
@@ -124,6 +146,17 @@ class JobRepository:
         result = await self.db.execute(
             select(ProcessingJob)
             .where(ProcessingJob.alignment_run_id == alignment_run_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def for_image_semantic_index(
+        self, image_semantic_index_id: UUID
+    ) -> ProcessingJob | None:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(ProcessingJob.image_semantic_index_id == image_semantic_index_id)
             .order_by(ProcessingJob.created_at.desc())
             .limit(1)
         )

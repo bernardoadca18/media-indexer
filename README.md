@@ -1,9 +1,9 @@
 # Media Indexer
 
 Camada de entendimento e memória audiovisual do NeoVids. Registra projetos e
-sessões, preserva notas brutas, armazena mídias por identidade lógica e extrai
-metadata técnica, ASR, índice visual e segmentos temporais pesquisáveis em jobs
-assíncronos independentes.
+sessões, preserva notas brutas, armazena vídeo e imagens estáticas por identidade
+lógica e extrai metadata técnica, ASR, índices visuais/semânticos e unidades
+pesquisáveis em jobs assíncronos independentes.
 
 ## Quick start
 
@@ -86,11 +86,132 @@ Stage 16 Video Composer resolves original gameplay through read-only logical-ID 
     GET /media-assets/{media_id}
     GET /media-assets/{media_id}/content
 
-Metadata includes the immutable SHA-256, byte size and technical media fields, but never exposes
+Metadata includes `media_kind`, the immutable SHA-256, byte size and technical media fields, but never exposes
 `storage_uri`, probe blobs or host paths. The content endpoint resolves only a database-owned
 MediaAsset from either `local://` primary storage or `local-hdd://` secondary storage and supports
 HTTP byte ranges. Callers use `media_id`; they cannot supply paths or arbitrary URLs. No schema
-migration was required for this projection.
+migration was required for this projection originally; source images now reuse
+the same materialization contract.
+
+## Static Image Memory
+
+Static JPEG, PNG and WebP files are first-class source `MediaAsset`s. They are
+not sessions, derived video frames or temporal segments, and therefore have no
+duration or timestamps. Ingestion validates detected MIME/format and the whole
+image payload, extracts dimensions, streams to managed storage and deduplicates
+by project plus SHA-256.
+
+The request accepts immutable operator provenance separately from model
+observation:
+
+```bash
+PROJECT_ID="..."
+IMAGE_PATH="/absolute/path/to/one-image.jpg"
+IMAGE_MIME="image/jpeg"
+PROVENANCE='{"source_owner":"publisher","source_class":"official","asset_class":"official_screenshot","collection":"screenshots","game":"example_game","declared_metadata":{"known_subject":"operator-confirmed name"}}'
+
+RESPONSE=$(curl -sS -X POST "http://localhost:8012/projects/$PROJECT_ID/images" \
+  -F "image=@$IMAGE_PATH;type=$IMAGE_MIME" \
+  -F "provenance=$PROVENANCE" \
+  -F 'enqueue_semantic_index=true')
+MEDIA_ID=$(printf '%s' "$RESPONSE" | jq -r .media_asset.id)
+IMAGE_INDEX_ID=$(printf '%s' "$RESPONSE" | jq -r .semantic_index.id)
+JOB_ID=$(printf '%s' "$RESPONSE" | jq -r .job.id)
+```
+
+The HTTP response is 202 whether content was created or safely reused. An
+equivalent checksum with different provenance is HTTP 409; existing metadata is
+never overwritten. The original remains available even if semantic processing
+fails:
+
+```bash
+curl -sS "http://localhost:8012/media-assets/$MEDIA_ID" | jq
+curl -sS "http://localhost:8012/media-assets/$MEDIA_ID/provenance" | jq
+curl -fL "http://localhost:8012/media-assets/$MEDIA_ID/content" -o /tmp/materialized-image
+curl -sS "http://localhost:8012/image-semantic-indexes/$IMAGE_INDEX_ID" | jq
+curl -sS "http://localhost:8012/jobs/$JOB_ID" | jq
+```
+
+The durable `image_semantic_index` job sends exactly one image through 9Router's
+provider-neutral `neovids-vision` alias and validates factual structured output.
+The model is instructed not to guess named people or locations. Declared
+provenance and visual observations remain distinguishable. A deterministic,
+versioned text representation combines safe fields and is embedded directly by
+Ollama with `mxbai-embed-large:latest`, 1024 dimensions. Completion requires the
+vector; errors never become empty captions. Re-posting the ensure endpoint is
+the explicit retry for a failed index and reuses a saved vision result after an
+embedding-only failure:
+
+```bash
+curl -sS -X POST \
+  "http://localhost:8012/media-assets/$MEDIA_ID/image-semantic-indexes" | jq
+```
+
+Project image search is separate from temporal footage search:
+
+```bash
+curl -sS -X POST "http://localhost:8012/image-search/projects/$PROJECT_ID" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query":"city at night with neon, traffic and palm trees",
+    "limit":20,
+    "filters":{"asset_class":"official_screenshot","source_class":"official"}
+  }' | jq
+```
+
+Filters are exact matches for `source_owner`, `source_class`, `asset_class`,
+`collection` and `game`; `exclude_asset_classes` is also supported. Results
+contain `media_id`, technical metadata, immutable provenance, score, semantic
+preview/index provenance and `/media-assets/{id}/content`. They contain no
+temporal range or internal storage URI. Query text is embedded once per exact
+provider/model/dimension compatibility group.
+
+For a re-runnable directory batch, invoke the public API client. It ignores
+unsupported extensions and symlinks, opens only bounded concurrent files,
+defaults heavy concurrency to one and reports created/reused/ready/pending/
+failed counts:
+
+```bash
+cd backend
+python scripts/batch_ingest_images.py /absolute/path/to/screenshots \
+  --project-id "$PROJECT_ID" \
+  --source-owner publisher \
+  --source-class official \
+  --asset-class official_screenshot \
+  --collection screenshots \
+  --game example_game \
+  --concurrency 1 \
+  --wait
+```
+
+Re-running the command resumes the batch: assets are reused and equivalent
+pending/completed indexes are not duplicated; retryable failed indexes are
+re-queued until `JOB_MAX_ATTEMPTS` is exhausted. A process restart recovers
+pending and stale-processing jobs from PostgreSQL. The current deployment uses
+one worker, so semantic heavy concurrency is one even if upload concurrency is
+raised.
+
+Static image settings:
+
+```text
+IMAGE_MAX_BYTES=26214400
+IMAGE_MAX_PIXELS=100000000
+IMAGE_MAX_PROVENANCE_CHARACTERS=20000
+IMAGE_VISION_MODEL=neovids-vision
+IMAGE_VISION_TIMEOUT_SECONDS=120
+IMAGE_BATCH_CONCURRENCY=1
+NINEROUTER_BASE_URL=http://9router:20128
+NINEROUTER_API_KEY=
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+EMBEDDING_MODEL=mxbai-embed-large:latest
+EMBEDDING_DIMENSIONS=1024
+```
+
+Normal tests use `FakeImageSemanticProvider` and `FakeEmbeddingProvider`; they
+never contact 9Router/Ollama or download a model. The command above with one
+file is the opt-in real smoke and may consume the configured vision route's
+quota. Do not point it at a corpus until that one job is completed and its
+structured result/search/materialization have been reviewed.
 
 ## Timestamped transcription
 

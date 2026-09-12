@@ -11,6 +11,10 @@ from app.services.embedding_provider import (
     EmbeddingProvider,
     ollama_embedding_provider,
 )
+from app.services.image_semantic_provider import (
+    ImageSemanticProvider,
+    NinerouterImageSemanticProvider,
+)
 from app.services.storage import LocalStorage, Storage
 
 
@@ -46,12 +50,20 @@ def get_embedding_provider() -> EmbeddingProvider:
     return ollama_embedding_provider
 
 
+@lru_cache
+def get_image_semantic_provider() -> ImageSemanticProvider:
+    return NinerouterImageSemanticProvider(settings.image_vision_timeout_seconds)
+
+
 async def get_db() -> AsyncIterator[AsyncSession]:
     async for session in _get_db():
         yield session
 
 
 EmbeddingDep = Annotated[EmbeddingProvider, Depends(get_embedding_provider)]
+ImageSemanticProviderDep = Annotated[
+    ImageSemanticProvider, Depends(get_image_semantic_provider)
+]
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 StorageDep = Annotated[Storage, Depends(get_storage)]

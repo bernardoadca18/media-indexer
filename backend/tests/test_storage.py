@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.storage import LocalStorage
+from app.services.storage import LocalStorage, StorageLimitError
 
 
 class ChunkedUpload:
@@ -275,3 +275,43 @@ async def test_derived_storage_atomic_write_smoke(tmp_path: Path) -> None:
     parent = file_path.parent
     temp_files = list(parent.glob(".*.tmp"))
     assert temp_files == [], "No temporary files should remain"
+
+
+async def test_media_source_enforces_size_limit_and_cleans_partial_file(tmp_path: Path) -> None:
+    project_id, media_id = uuid4(), uuid4()
+    storage = LocalStorage(tmp_path)
+    upload = ChunkedUpload([b"12345", b"67890"])
+    with pytest.raises(StorageLimitError, match="byte limit"):
+        await storage.save_media_source(  # type: ignore[arg-type]
+            project_id, media_id, upload, max_bytes=8
+        )
+    source = tmp_path / "projects" / str(project_id) / "media" / str(media_id) / "source"
+    assert list(source.iterdir()) == []
+
+
+async def test_media_source_rejects_symlink_namespace_escape(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    project_id, media_id = uuid4(), uuid4()
+    namespace = root / "projects" / str(project_id) / "media"
+    namespace.mkdir(parents=True)
+    (namespace / str(media_id)).symlink_to(outside, target_is_directory=True)
+    storage = LocalStorage(root)
+    with pytest.raises(ValueError, match="escapes storage root"):
+        await storage.save_media_source(  # type: ignore[arg-type]
+            project_id, media_id, ChunkedUpload([b"data"]), max_bytes=100
+        )
+    assert list(outside.iterdir()) == []
+
+
+async def test_media_source_sanitizes_caller_filename_path(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    upload = ChunkedUpload([b"image"])
+    upload.filename = r"..\..\escape.png"
+    stored = await storage.save_media_source(  # type: ignore[arg-type]
+        uuid4(), uuid4(), upload, max_bytes=100
+    )
+    assert stored.uri.endswith("/source/escape.png")
+    assert storage.resolve(stored.uri).is_relative_to(tmp_path)

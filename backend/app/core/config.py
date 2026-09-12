@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: float = 60.0
     embedding_max_attempts: int = 3
     embedding_batch_size: int = 32
+    image_max_bytes: int = 25 * 1024 * 1024
+    image_max_pixels: int = 100_000_000
+    image_max_provenance_characters: int = 20_000
+    image_vision_model: str = "neovids-vision"
+    image_vision_timeout_seconds: float = 120.0
+    image_batch_concurrency: int = 1
     temporal_target_duration_seconds: float = 30.0
     temporal_min_duration_seconds: float = 15.0
     temporal_max_duration_seconds: float = 60.0

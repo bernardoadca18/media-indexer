@@ -79,6 +79,19 @@ Project/Session Media Search is implemented as a public search API:
 - session and project filter support;
 - deterministic smoke tests and manual evaluation scripts.
 
+First-class Static Image Memory is implemented:
+
+- managed JPEG/PNG/WebP source ingestion with content validation, limits,
+  checksum identity and project-scoped idempotency;
+- explicit image/video kind and immutable, filterable operator provenance;
+- non-temporal ImageSemanticIndex plus independent durable jobs and recovery;
+- provider-neutral structured captioning through 9Router `neovids-vision`;
+- deterministic versioned canonical text and direct Ollama vector(1024)
+  embeddings with HNSW cosine indexing;
+- project Image Search with provenance filters, compatibility grouping and
+  MediaAsset materialization IDs;
+- bounded, resumable directory batch client and one-image real smoke procedure.
+
 ## Planned
 
 1. Integration with Ideas Hub / game_analysis workflow.
@@ -86,5 +99,5 @@ Project/Session Media Search is implemented as a public search API:
 Editorial work stays in Ideas Hub; voice, planning, composition and rendering
 stay in production services.
 
-There is still no OCR, image captioning, generic multimodal search,
+There is still no dedicated OCR, unified image+footage response schema,
 Ideas Hub/Orchestrator integration or composition/rendering pipeline in this service.

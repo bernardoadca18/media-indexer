@@ -121,6 +121,7 @@ class MediaAssetMetadataOut(ORMModel):
     content_type: str | None
     byte_size: int = Field(ge=0)
     sha256: str = Field(min_length=64, max_length=64)
+    media_kind: str
     duration_seconds: float | None = Field(default=None, gt=0)
     format_name: str | None
     video_codec: str | None
@@ -152,9 +153,10 @@ class JobOut(ORMModel):
     temporal_index_id: UUID | None
     alignment_run_id: UUID | None
     project_id: UUID
-    session_id: UUID
+    session_id: UUID | None
     media_id: UUID
     transcription_id: UUID | None
+    image_semantic_index_id: UUID | None
     job_type: str
     visual_index_id: UUID | None
     status: str
