@@ -81,32 +81,20 @@ class TestLocalStorageMountValidation:
 
 
 class TestTempDirectoryConfiguration:
-    """Tests for temp directory configuration."""
-
-    def test_temp_root_creates_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Setting temp_root creates the directory and sets env vars."""
-        from app.core.config import Settings
-        from app.main import configure_temp_directory
-
-        temp_dir = tmp_path / "temp-hdd"
-        settings = Settings(temp_root=temp_dir)
-        monkeypatch.setattr("app.main.settings", settings)
-
-        configure_temp_directory()
-
-        assert temp_dir.exists()
-        assert os.environ.get("TMPDIR") == str(temp_dir.resolve())
-        assert os.environ.get("TMP") == str(temp_dir.resolve())
-        assert os.environ.get("TEMP") == str(temp_dir.resolve())
+    """Tests for temp directory configuration with fail-closed validation."""
 
     def test_temp_root_none_does_not_set_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When temp_root is None, env vars are not set."""
+        import tempfile
+
         from app.core.config import Settings
         from app.main import configure_temp_directory
 
         # Clear any existing values
         for key in ("TMPDIR", "TMP", "TEMP"):
             os.environ.pop(key, None)
+        # Reset tempfile.tempdir
+        tempfile.tempdir = None
 
         settings = Settings(temp_root=None)
         monkeypatch.setattr("app.main.settings", settings)
@@ -117,3 +105,57 @@ class TestTempDirectoryConfiguration:
         assert "TMPDIR" not in os.environ
         assert "TMP" not in os.environ
         assert "TEMP" not in os.environ
+
+    @patch("app.services.storage.is_mount_point")
+    def test_temp_root_valid_mount_sets_env_vars(self, mock_is_mount: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TEMP_ROOT configured with valid mount point sets TMPDIR/TMP/TEMP and tempfile.tempdir."""
+        import tempfile
+
+        from app.core.config import Settings
+        from app.main import configure_temp_directory
+
+        temp_dir = tmp_path / "temp-hdd"
+        temp_dir.mkdir()
+
+        mock_is_mount.return_value = True
+        settings = Settings(temp_root=temp_dir)
+        monkeypatch.setattr("app.main.settings", settings)
+
+        configure_temp_directory()
+
+        assert os.environ.get("TMPDIR") == str(temp_dir.resolve())
+        assert os.environ.get("TMP") == str(temp_dir.resolve())
+        assert os.environ.get("TEMP") == str(temp_dir.resolve())
+        assert tempfile.tempdir == str(temp_dir.resolve())
+        mock_is_mount.assert_called_once_with(temp_dir.resolve())
+
+    def test_temp_root_existing_directory_not_mount_raises_runtime_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TEMP_ROOT configured with existing directory that is NOT a mount point raises RuntimeError."""
+        from app.core.config import Settings
+        from app.main import configure_temp_directory
+
+        # Create a directory that is NOT a mount point
+        temp_dir = tmp_path / "temp-not-mount"
+        temp_dir.mkdir()
+
+        settings = Settings(temp_root=temp_dir)
+        monkeypatch.setattr("app.main.settings", settings)
+
+        with pytest.raises(RuntimeError, match="not a mount point"):
+            configure_temp_directory()
+
+    def test_temp_root_nonexistent_path_raises_runtime_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """TEMP_ROOT configured with nonexistent path raises RuntimeError without creating directory."""
+        from app.core.config import Settings
+        from app.main import configure_temp_directory
+
+        nonexistent = tmp_path / "does-not-exist"
+
+        settings = Settings(temp_root=nonexistent)
+        monkeypatch.setattr("app.main.settings", settings)
+
+        with pytest.raises(RuntimeError, match="does not exist"):
+            configure_temp_directory()
+
+        # Directory should NOT be created
+        assert not nonexistent.exists()

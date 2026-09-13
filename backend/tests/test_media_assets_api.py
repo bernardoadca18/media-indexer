@@ -90,7 +90,7 @@ async def test_media_asset_content_materializes_local_hdd(
         content,
     )
     client.app.dependency_overrides[get_storage] = lambda: LocalStorage(
-        primary, root_hdd=hdd
+        primary, root_hdd=hdd, validate_hdd_mount=False
     )
 
     response = await client.get(f"/media-assets/{media['id']}/content")
@@ -116,7 +116,7 @@ async def test_media_asset_content_returns_404_for_missing_local_hdd(
         "local-hdd://projects/test/sessions/test/source/missing.mp4",
     )
     client.app.dependency_overrides[get_storage] = lambda: LocalStorage(
-        primary, root_hdd=hdd
+        primary, root_hdd=hdd, validate_hdd_mount=False
     )
 
     response = await client.get(f"/media-assets/{media['id']}/content")
@@ -160,7 +160,7 @@ async def test_media_asset_content_rejects_unmanaged_or_escaping_uri(
     hdd.mkdir()
     await _set_managed_location(session_factory, media["id"], storage_uri)
     client.app.dependency_overrides[get_storage] = lambda: LocalStorage(
-        primary, root_hdd=hdd
+        primary, root_hdd=hdd, validate_hdd_mount=False
     )
 
     response = await client.get(f"/media-assets/{media['id']}/content")

@@ -36,16 +36,47 @@ def configure_temp_directory() -> None:
     """
     Configure temp directory for large file operations.
 
-    If temp_root is set, use it as the temp directory (should be HDD-backed).
+    If temp_root is set, it MUST be a real mount point (HDD-backed).
     This ensures large uploads, ffmpeg operations, and other temp files
     go to the HDD instead of the SSD-backed default /tmp.
+
+    Fail-closed: raises RuntimeError if temp_root is set but not a mount point.
     """
-    if settings.temp_root is not None:
-        temp_path = settings.temp_root.resolve()
-        temp_path.mkdir(parents=True, exist_ok=True)
-        os.environ["TMPDIR"] = str(temp_path)
-        os.environ["TMP"] = str(temp_path)
-        os.environ["TEMP"] = str(temp_path)
+    import tempfile
+
+    from app.services.storage import is_mount_point
+
+    if settings.temp_root is None:
+        # No temp_root configured - use system default
+        return
+
+    temp_path = settings.temp_root.resolve()
+
+    # Fail-closed: temp_root MUST be a real mount point when configured
+    # This prevents silently falling back to Docker's writable layer (SSD)
+    if not temp_path.exists():
+        raise RuntimeError(
+            f"TEMP_ROOT '{temp_path}' does not exist. "
+            "When TEMP_ROOT is configured, the path must be created by the Docker bind mount. "
+            "Verify MEDIA_INDEXER_TEMP_HOST_PATH is set correctly and the host path exists."
+        )
+
+    if not is_mount_point(temp_path):
+        raise RuntimeError(
+            f"TEMP_ROOT '{temp_path}' is not a mount point. "
+            "This indicates the temp directory bind mount is missing or misconfigured. "
+            "Large temp files would fall back to Docker's writable layer (SSD), which is not allowed. "
+            "Verify MEDIA_INDEXER_TEMP_HOST_PATH is set and the Docker volume is mounted correctly."
+        )
+
+    # Configure temp directory for Python and subprocesses
+    os.environ["TMPDIR"] = str(temp_path)
+    os.environ["TMP"] = str(temp_path)
+    os.environ["TEMP"] = str(temp_path)
+
+    # Also set tempfile.tempdir to ensure Python's tempfile module uses it
+    # This eliminates any risk of Python having cached another directory
+    tempfile.tempdir = str(temp_path)
 
 
 # Configure temp directory early, before any temp file operations
