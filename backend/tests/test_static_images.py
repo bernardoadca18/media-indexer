@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -17,11 +18,15 @@ from app.services.embedding_provider import FakeEmbeddingProvider
 from app.services.image_ingestion import ImageIngestionService
 from app.services.image_search import ImageSearchService
 from app.services.image_semantic_index import (
+    OPERATOR_IMAGE_CANONICAL_TEXT_VERSION,
+    OPERATOR_IMAGE_PROVIDER,
+    OPERATOR_IMAGE_SEMANTIC_STRATEGY,
     ImageSemanticAttemptsExhaustedError,
     ImageSemanticDimensionError,
     ImageSemanticIndexProcessor,
     ImageSemanticIndexRequest,
     ImageSemanticIndexService,
+    OperatorImageSemanticImportRequest,
     build_canonical_image_text,
 )
 from app.services.image_semantic_provider import (
@@ -238,6 +243,146 @@ async def test_semantic_index_is_versioned_deterministic_and_reused(db, tmp_path
     assert build_canonical_image_text(provenance, result) == build_canonical_image_text(
         provenance, result
     )
+
+
+def operator_semantic_request(
+    text: str = "A human-assisted description of an official street scene.",
+    *,
+    embedding_model: str = "mxbai-embed-large:latest",
+) -> OperatorImageSemanticImportRequest:
+    return OperatorImageSemanticImportRequest(
+        semantic_text=text,
+        sidecar_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        embedding_provider="fake",
+        embedding_model=embedding_model,
+        embedding_dimensions=1024,
+    )
+
+
+async def test_operator_semantic_import_embeds_without_vision_and_is_versioned(
+    db, tmp_path: Path
+) -> None:
+    project, storage, ingested = await direct_image(db, tmp_path)
+    service = ImageSemanticIndexService(db, 3)
+    first = await service.ensure_operator_import(ingested.media.id, operator_semantic_request())
+    repeated = await service.ensure_operator_import(ingested.media.id, operator_semantic_request())
+    changed = await service.ensure_operator_import(
+        ingested.media.id,
+        operator_semantic_request("Changed operator-authored semantic description."),
+    )
+    changed_embedding = await service.ensure_operator_import(
+        ingested.media.id,
+        operator_semantic_request(embedding_model="mxbai-embed-large:next"),
+    )
+    assert first.created and first.enqueue
+    assert repeated.semantic_index.id == first.semantic_index.id
+    assert not repeated.created and not repeated.enqueue
+    assert changed.semantic_index.id != first.semantic_index.id
+    assert changed_embedding.semantic_index.id != first.semantic_index.id
+    assert first.semantic_index.strategy == OPERATOR_IMAGE_SEMANTIC_STRATEGY
+    assert first.semantic_index.vision_provider == OPERATOR_IMAGE_PROVIDER
+    assert first.semantic_index.canonical_text_version == OPERATOR_IMAGE_CANONICAL_TEXT_VERSION
+    assert first.semantic_index.configuration["image_sha256"] == ingested.media.sha256
+    assert first.semantic_index.provider_metadata["vision_invoked"] is False
+
+    vision = FakeImageSemanticProvider(fail=True)
+    embeddings = FakeEmbeddingProvider(dimensions=1024)
+    registry = ProcessorRegistry(
+        {
+            "image_semantic_index": lambda current_db: ImageSemanticIndexProcessor(
+                current_db, storage, vision, embeddings
+            )
+        }
+    )
+    assert await JobExecutor(db, registry).execute(first.job.id)
+    await db.refresh(first.semantic_index)
+    assert first.semantic_index.status == "completed"
+    assert first.semantic_index.semantic_result["semantic_source"] == "human_assisted_import"
+    assert "human-assisted description" in first.semantic_index.canonical_search_text
+    assert vision.call_count == 0
+    assert embeddings.embed_call_count == 1
+    search = await ImageSearchService(db, embeddings).search_project(
+        project.id, ImageSearchRequest(query="official street scene")
+    )
+    assert [item.media_id for item in search.results] == [ingested.media.id]
+    assert search.results[0].semantic_index.strategy == OPERATOR_IMAGE_SEMANTIC_STRATEGY
+    assert search.results[0].semantic_preview.startswith("A human-assisted description")
+    assert vision.call_count == 0
+
+
+async def test_operator_semantic_import_recovers_failed_embedding_without_vision(
+    db, tmp_path: Path
+) -> None:
+    _, storage, ingested = await direct_image(db, tmp_path)
+    service = ImageSemanticIndexService(db, 3)
+    first = await service.ensure_operator_import(ingested.media.id, operator_semantic_request())
+    vision = FakeImageSemanticProvider(fail=True)
+    failing = ProcessorRegistry(
+        {
+            "image_semantic_index": lambda current_db: ImageSemanticIndexProcessor(
+                current_db,
+                storage,
+                vision,
+                FakeEmbeddingProvider(dimensions=1024, fail=True),
+            )
+        }
+    )
+    assert not await JobExecutor(db, failing).execute(first.job.id)
+    resumed = await service.ensure_operator_import(ingested.media.id, operator_semantic_request())
+    assert resumed.semantic_index.id == first.semantic_index.id
+    assert resumed.enqueue and not resumed.created
+    good_embeddings = FakeEmbeddingProvider(dimensions=1024)
+    recovery = ProcessorRegistry(
+        {
+            "image_semantic_index": lambda current_db: ImageSemanticIndexProcessor(
+                current_db, storage, vision, good_embeddings
+            )
+        }
+    )
+    assert await JobExecutor(db, recovery).execute(resumed.job.id)
+    assert vision.call_count == 0
+
+
+async def test_operator_semantic_import_rejects_mismatched_sidecar_checksum(
+    db, tmp_path: Path
+) -> None:
+    _, _, ingested = await direct_image(db, tmp_path)
+    request = operator_semantic_request()
+    invalid = request.__class__(**{**request.__dict__, "sidecar_sha256": "0" * 64})
+    with pytest.raises(ValueError, match="sidecar SHA-256"):
+        await ImageSemanticIndexService(db, 3).ensure_operator_import(ingested.media.id, invalid)
+
+
+async def test_operator_semantic_import_api_is_truthful_and_idempotent(client) -> None:
+    client.app.dependency_overrides[get_embedding_provider] = lambda: FakeEmbeddingProvider(
+        dimensions=1024
+    )
+    project = (await client.post("/projects", json={"name": "operator semantics"})).json()
+    content = image_bytes("PNG")
+    ingested = await client.post(
+        f"/projects/{project['id']}/images",
+        data={"provenance": "{}", "enqueue_semantic_index": "false"},
+        files={"image": ("one.png", content, "image/png")},
+    )
+    text_value = "Existing semantic description from a companion Markdown file."
+    payload = {
+        "version": "operator_semantic_import_v1",
+        "semantic_text": text_value,
+        "sidecar_sha256": hashlib.sha256(text_value.encode("utf-8")).hexdigest(),
+    }
+    media_id = ingested.json()["media_asset"]["id"]
+    first = await client.post(f"/media-assets/{media_id}/operator-image-semantics", json=payload)
+    repeated = await client.post(f"/media-assets/{media_id}/operator-image-semantics", json=payload)
+    assert first.status_code == repeated.status_code == 202
+    assert first.json()["semantic_index"]["vision_provider"] == "operator_import"
+    assert first.json()["semantic_index"]["vision_model"] == "semantic_sidecar"
+    assert first.json()["semantic_index"]["configuration"]["semantic_source"] == (
+        "human_assisted_import"
+    )
+    assert first.json()["semantic_index"]["embedding_model"] == "mxbai-embed-large:latest"
+    assert first.json()["semantic_index"]["embedding_dimensions"] == 1024
+    assert repeated.json()["created"] is False
+    assert repeated.json()["semantic_index"]["id"] == first.json()["semantic_index"]["id"]
 
 
 async def test_provider_and_embedding_failures_are_durable_and_retry_resumes(

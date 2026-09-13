@@ -118,6 +118,10 @@ name `ix_media_asset_provenance_project_asset_class` and adds
 `ix_media_asset_provenance_project_source_class`. Owner, collection, and game indexes from `0011`
 remain unchanged; Image Search semantics are unaffected.
 
+Operational preparation for the operator-managed GTA IV/V/VI corpus is documented in
+[`docs/GTA_CANONICAL_CORPUS_INGEST.md`](docs/GTA_CANONICAL_CORPUS_INGEST.md). Its preflight is
+read-only and ingestion remains an explicit operator action against an existing project ID.
+
 The request accepts immutable operator provenance separately from model
 observation:
 

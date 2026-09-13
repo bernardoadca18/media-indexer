@@ -15,6 +15,7 @@ from app.schemas.image import (
     ImageProvenanceOut,
     ImageSemanticIndexJobOut,
     ImageSemanticIndexOut,
+    OperatorImageSemanticImportIn,
 )
 from app.services.image_ingestion import (
     ImageIngestionService,
@@ -29,6 +30,7 @@ from app.services.image_semantic_index import (
     ImageSemanticIndexRequest,
     ImageSemanticIndexService,
     ImageSemanticPrerequisiteError,
+    OperatorImageSemanticImportRequest,
 )
 from app.services.storage import StorageLimitError
 from app.workers.runner import job_runner
@@ -76,7 +78,9 @@ async def ingest_image(
     try:
         provenance_request = ImageProvenanceIn.model_validate(json.loads(provenance))
     except (json.JSONDecodeError, ValidationError, TypeError) as exc:
-        raise HTTPException(422, "provenance must be a valid ImageProvenanceIn JSON object") from exc
+        raise HTTPException(
+            422, "provenance must be a valid ImageProvenanceIn JSON object"
+        ) from exc
     try:
         ingested = await ImageIngestionService(
             db,
@@ -137,6 +141,51 @@ async def ensure_image_semantic_index(
         result = await ImageSemanticIndexService(db, settings.job_max_attempts).ensure(
             media_id,
             _index_request(vision_provider, embedding_provider),
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (
+        ImageSemanticPrerequisiteError,
+        ImageSemanticAttemptsExhaustedError,
+        ImageSemanticDimensionError,
+    ) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if result.enqueue:
+        job_runner.enqueue(result.job.id)
+    return ImageSemanticIndexJobOut(
+        semantic_index=result.semantic_index,
+        job=result.job,
+        created=result.created,
+    )
+
+
+@router.post(
+    "/media-assets/{media_id}/operator-image-semantics",
+    response_model=ImageSemanticIndexJobOut,
+    status_code=202,
+)
+async def import_operator_image_semantics(
+    media_id: UUID,
+    payload: OperatorImageSemanticImportIn,
+    db: DB,
+    embedding_provider: EmbeddingDep,
+) -> ImageSemanticIndexJobOut:
+    """Persist operator-authored sidecar semantics and enqueue embedding only."""
+    try:
+        result = await ImageSemanticIndexService(
+            db, settings.job_max_attempts
+        ).ensure_operator_import(
+            media_id,
+            OperatorImageSemanticImportRequest(
+                semantic_text=payload.semantic_text,
+                sidecar_sha256=payload.sidecar_sha256,
+                semantic_source=payload.semantic_source,
+                import_version=payload.version,
+                parser_version=payload.parser_version,
+                embedding_provider=embedding_provider.name,
+                embedding_model=settings.embedding_model,
+                embedding_dimensions=settings.embedding_dimensions,
+            ),
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

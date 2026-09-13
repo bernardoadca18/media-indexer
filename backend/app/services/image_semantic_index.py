@@ -31,6 +31,14 @@ logger = structlog.get_logger(__name__)
 
 IMAGE_SEMANTIC_STRATEGY = "vision_caption_text_embedding_v1"
 IMAGE_CANONICAL_TEXT_VERSION = "image_search_text_v1"
+OPERATOR_IMAGE_SEMANTIC_STRATEGY = "operator_semantic_text_embedding_v1"
+OPERATOR_IMAGE_IMPORT_VERSION = "operator_semantic_import_v1"
+OPERATOR_IMAGE_PARSER_VERSION = "operator_semantic_markdown_v1"
+OPERATOR_IMAGE_RESULT_SCHEMA_VERSION = "operator_semantic_text_v1"
+OPERATOR_IMAGE_CANONICAL_TEXT_VERSION = "operator_image_search_text_v1"
+OPERATOR_IMAGE_SEMANTIC_SOURCE = "human_assisted_import"
+OPERATOR_IMAGE_PROVIDER = "operator_import"
+OPERATOR_IMAGE_MODEL = "semantic_sidecar"
 
 
 class ImageSemanticPrerequisiteError(ValueError):
@@ -59,6 +67,21 @@ class ImageSemanticIndexRequest:
 
 
 @dataclass(frozen=True)
+class OperatorImageSemanticImportRequest:
+    semantic_text: str
+    sidecar_sha256: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_dimensions: int
+    semantic_source: str = OPERATOR_IMAGE_SEMANTIC_SOURCE
+    import_version: str = OPERATOR_IMAGE_IMPORT_VERSION
+    parser_version: str = OPERATOR_IMAGE_PARSER_VERSION
+    strategy: str = OPERATOR_IMAGE_SEMANTIC_STRATEGY
+    result_schema_version: str = OPERATOR_IMAGE_RESULT_SCHEMA_VERSION
+    canonical_text_version: str = OPERATOR_IMAGE_CANONICAL_TEXT_VERSION
+
+
+@dataclass(frozen=True)
 class EnsureImageSemanticIndexResult:
     semantic_index: ImageSemanticIndex
     job: ProcessingJob
@@ -82,7 +105,9 @@ def _declared_value(value: Any) -> str | None:
         return "true" if value else "false"
     if isinstance(value, int | float):
         return str(value)
-    if isinstance(value, list) and all(isinstance(item, str | int | float | bool) for item in value):
+    if isinstance(value, list) and all(
+        isinstance(item, str | int | float | bool) for item in value
+    ):
         rendered = [_declared_value(item) for item in value]
         return ", ".join(item for item in rendered if item)
     return None
@@ -137,6 +162,31 @@ def build_canonical_image_text(
     return "\n".join(parts)
 
 
+def build_operator_canonical_image_text(
+    provenance: MediaAssetProvenance,
+    semantic_text: str,
+) -> str:
+    """Build retrieval text while preserving operator-authored semantics as its source."""
+    parts = [f"Canonical text version: {OPERATOR_IMAGE_CANONICAL_TEXT_VERSION}."]
+    declared = (
+        ("Source owner", provenance.source_owner),
+        ("Source class", provenance.source_class),
+        ("Asset class", provenance.asset_class),
+        ("Collection", provenance.collection),
+        ("Game", provenance.game),
+    )
+    for label, value in declared:
+        if value:
+            parts.append(f"Declared {label.casefold()}: {_clean(value)}.")
+    for key in sorted(provenance.declared_metadata):
+        rendered = _declared_value(provenance.declared_metadata[key])
+        if rendered:
+            label = " ".join(key.replace("_", " ").split())
+            parts.append(f"Declared {label}: {rendered}.")
+    parts.append(f"Operator semantic description: {_clean(semantic_text)}")
+    return "\n".join(parts)
+
+
 class ImageSemanticIndexService:
     def __init__(self, db: AsyncSession, max_attempts: int) -> None:
         self.db = db
@@ -181,10 +231,122 @@ class ImageSemanticIndexService:
             "embedding_dimensions": request.embedding_dimensions,
             "provenance_fingerprint": provenance.fingerprint,
         }
+        return await self._ensure_configuration(
+            media,
+            configuration=configuration,
+            strategy=request.strategy,
+            prompt_version=request.prompt_version,
+            result_schema_version=request.result_schema_version,
+            canonical_text_version=request.canonical_text_version,
+            vision_provider=request.vision_provider,
+            vision_model=request.vision_model,
+            embedding_provider=request.embedding_provider,
+            embedding_model=request.embedding_model,
+            embedding_dimensions=request.embedding_dimensions,
+        )
+
+    async def ensure_operator_import(
+        self,
+        media_id: UUID,
+        request: OperatorImageSemanticImportRequest,
+    ) -> EnsureImageSemanticIndexResult:
+        media = await MediaAssetRepository(self.db).get(media_id)
+        if media is None:
+            raise LookupError("media asset not found")
+        if media.media_kind != "image":
+            raise ImageSemanticPrerequisiteError("media asset is not a source static image")
+        if request.embedding_dimensions != EMBEDDING_VECTOR_DIMENSIONS:
+            raise ImageSemanticDimensionError(
+                f"database vector dimension is {EMBEDDING_VECTOR_DIMENSIONS}; "
+                f"configured {request.embedding_dimensions}"
+            )
+        if (
+            request.strategy != OPERATOR_IMAGE_SEMANTIC_STRATEGY
+            or request.import_version != OPERATOR_IMAGE_IMPORT_VERSION
+            or request.parser_version != OPERATOR_IMAGE_PARSER_VERSION
+            or request.result_schema_version != OPERATOR_IMAGE_RESULT_SCHEMA_VERSION
+            or request.canonical_text_version != OPERATOR_IMAGE_CANONICAL_TEXT_VERSION
+            or request.semantic_source != OPERATOR_IMAGE_SEMANTIC_SOURCE
+        ):
+            raise ImageSemanticPrerequisiteError(
+                "unsupported operator image semantic import version"
+            )
+        semantic_text = request.semantic_text.strip()
+        if not semantic_text:
+            raise ImageSemanticPrerequisiteError("operator semantic text cannot be empty")
+        expected_sidecar_sha256 = hashlib.sha256(request.semantic_text.encode("utf-8")).hexdigest()
+        if request.sidecar_sha256 != expected_sidecar_sha256:
+            raise ImageSemanticPrerequisiteError(
+                "semantic sidecar SHA-256 does not match the supplied UTF-8 text"
+            )
+        provenance = await MediaAssetRepository(self.db).provenance(media_id)
+        if provenance is None:
+            raise ImageSemanticPrerequisiteError("image has no declared provenance")
+        configuration: dict[str, Any] = {
+            "strategy": request.strategy,
+            "semantic_source": request.semantic_source,
+            "import_version": request.import_version,
+            "parser_version": request.parser_version,
+            "result_schema_version": request.result_schema_version,
+            "canonical_text_version": request.canonical_text_version,
+            "image_sha256": media.sha256,
+            "semantic_sidecar_sha256": request.sidecar_sha256,
+            "embedding_provider": request.embedding_provider,
+            "embedding_model": request.embedding_model,
+            "embedding_dimensions": request.embedding_dimensions,
+            "provenance_fingerprint": provenance.fingerprint,
+        }
+        canonical_text = build_operator_canonical_image_text(provenance, semantic_text)
+        semantic_result = {
+            "semantic_source": request.semantic_source,
+            "import_version": request.import_version,
+            "parser_version": request.parser_version,
+            "sidecar_sha256": request.sidecar_sha256,
+            "text": request.semantic_text,
+        }
+        return await self._ensure_configuration(
+            media,
+            configuration=configuration,
+            strategy=request.strategy,
+            prompt_version=request.import_version,
+            result_schema_version=request.result_schema_version,
+            canonical_text_version=request.canonical_text_version,
+            vision_provider=OPERATOR_IMAGE_PROVIDER,
+            vision_model=OPERATOR_IMAGE_MODEL,
+            embedding_provider=request.embedding_provider,
+            embedding_model=request.embedding_model,
+            embedding_dimensions=request.embedding_dimensions,
+            semantic_result=semantic_result,
+            canonical_search_text=canonical_text,
+            provider_metadata={
+                "semantic_source": request.semantic_source,
+                "vision_invoked": False,
+                "sidecar_sha256": request.sidecar_sha256,
+            },
+        )
+
+    async def _ensure_configuration(
+        self,
+        media: MediaAsset,
+        *,
+        configuration: dict[str, Any],
+        strategy: str,
+        prompt_version: str,
+        result_schema_version: str,
+        canonical_text_version: str,
+        vision_provider: str,
+        vision_model: str,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_dimensions: int,
+        semantic_result: dict[str, Any] | None = None,
+        canonical_search_text: str | None = None,
+        provider_metadata: dict[str, Any] | None = None,
+    ) -> EnsureImageSemanticIndexResult:
         fingerprint = image_configuration_fingerprint(configuration)
         repository = ImageSemanticIndexRepository(self.db)
         jobs = JobRepository(self.db)
-        existing = await repository.by_fingerprint(media_id, fingerprint)
+        existing = await repository.by_fingerprint(media.id, fingerprint)
         if existing is not None:
             job = await jobs.for_image_semantic_index(existing.id)
             if job is None:
@@ -212,17 +374,20 @@ class ImageSemanticIndexService:
             project_id=media.project_id,
             media_id=media.id,
             status="pending",
-            strategy=request.strategy,
-            prompt_version=request.prompt_version,
-            result_schema_version=request.result_schema_version,
-            canonical_text_version=request.canonical_text_version,
-            vision_provider=request.vision_provider,
-            vision_model=request.vision_model,
+            strategy=strategy,
+            prompt_version=prompt_version,
+            result_schema_version=result_schema_version,
+            canonical_text_version=canonical_text_version,
+            vision_provider=vision_provider,
+            vision_model=vision_model,
             configuration=configuration,
             configuration_fingerprint=fingerprint,
-            embedding_provider=request.embedding_provider,
-            embedding_model=request.embedding_model,
-            embedding_dimensions=request.embedding_dimensions,
+            semantic_result=semantic_result,
+            canonical_search_text=canonical_search_text,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            provider_metadata=provider_metadata,
         )
         self.db.add(semantic_index)
         try:
@@ -243,7 +408,7 @@ class ImageSemanticIndexService:
             await self.db.commit()
         except IntegrityError as exc:
             await self.db.rollback()
-            existing = await repository.by_fingerprint(media_id, fingerprint)
+            existing = await repository.by_fingerprint(media.id, fingerprint)
             if existing is None:
                 raise exc
             existing_job = await jobs.for_image_semantic_index(existing.id)
@@ -281,7 +446,8 @@ class ImageSemanticIndexProcessor:
             raise LookupError("image semantic resources not found")
         if media.media_kind != "image" or not media.content_type:
             raise ImageSemanticPrerequisiteError("semantic target is not a valid source image")
-        if semantic_index.vision_provider != self.vision_provider.name:
+        operator_import = semantic_index.strategy == OPERATOR_IMAGE_SEMANTIC_STRATEGY
+        if not operator_import and semantic_index.vision_provider != self.vision_provider.name:
             raise ImageSemanticPrerequisiteError("configured vision provider is not available")
         if semantic_index.embedding_provider != self.embedding_provider.name:
             raise ImageSemanticPrerequisiteError("configured embedding provider is not available")
@@ -290,12 +456,23 @@ class ImageSemanticIndexProcessor:
         semantic_index.started_at = semantic_index.started_at or datetime.now(UTC)
         semantic_index.completed_at = None
         semantic_index.error = None
-        job.stage = "describing"
+        job.stage = "embedding" if operator_import else "describing"
         job.progress = 0.05
         await self.db.commit()
 
-        if semantic_index.semantic_result is None:
-            content = await asyncio.to_thread(self.storage.resolve_any(media.storage_uri).read_bytes)
+        if operator_import:
+            if semantic_index.semantic_result is None or not semantic_index.canonical_search_text:
+                raise ImageSemanticPrerequisiteError(
+                    "operator semantic import is missing its persisted text outputs"
+                )
+            canonical_text = semantic_index.canonical_search_text
+            job.stage = "embedding"
+            job.progress = 0.65
+            await self.db.commit()
+        elif semantic_index.semantic_result is None:
+            content = await asyncio.to_thread(
+                self.storage.resolve_any(media.storage_uri).read_bytes
+            )
             response = await self.vision_provider.describe(
                 content,
                 mime_type=media.content_type,
@@ -346,6 +523,8 @@ class ImageSemanticIndexProcessor:
             media_id=str(media.id),
             image_semantic_index_id=str(semantic_index.id),
             job_id=str(job.id),
-            provider_route=semantic_index.vision_model,
+            provider_route=(
+                semantic_index.vision_model if not operator_import else OPERATOR_IMAGE_PROVIDER
+            ),
             attempt=job.attempt_count,
         )

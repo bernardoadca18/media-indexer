@@ -133,7 +133,9 @@ class ImageSearchService:
         ):
             raise ImageSearchError("completed image index has incomplete media metadata")
         semantic = index.semantic_result or {}
-        preview = str(semantic.get("summary") or semantic.get("description") or "").strip()
+        preview = str(
+            semantic.get("summary") or semantic.get("description") or semantic.get("text") or ""
+        ).strip()
         return ImageSearchResult(
             project_id=media.project_id,
             media_id=media.id,

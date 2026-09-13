@@ -72,6 +72,16 @@ class ImageSemanticIndexJobOut(BaseModel):
     created: bool
 
 
+class OperatorImageSemanticImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["operator_semantic_import_v1"]
+    semantic_source: Literal["human_assisted_import"] = "human_assisted_import"
+    parser_version: Literal["operator_semantic_markdown_v1"] = "operator_semantic_markdown_v1"
+    semantic_text: str = Field(min_length=1, max_length=200_000)
+    sidecar_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ImageSearchFilters(BaseModel):
     source_owner: str | None = Field(default=None, min_length=1, max_length=200)
     source_class: str | None = Field(default=None, min_length=1, max_length=100)

@@ -71,11 +71,13 @@ storage_uri or host paths; content streaming must never accept a caller-supplied
 First-class static image memory is now implemented. MediaAsset is the immutable source binary
 identity and media_kind distinguishes image from video. Keep operator-declared
 MediaAssetProvenance separate from model observation. ImageSemanticIndex is a non-temporal,
-versioned durable derivation that uses the provider-neutral 9Router neovids-vision route, then
-direct Ollama text embeddings. Never create a MediaSession, SceneSegment, DerivedAsset or fake
-time range for a source image. Image Search is project-scoped and returns MediaAsset IDs/content
-URLs without vectors, storage URIs, host paths or temporal coordinates. Tests use fake providers;
-real image analysis is an explicit one-image smoke only.
+versioned durable derivation. The vision strategy uses the provider-neutral 9Router
+neovids-vision route, then direct Ollama text embeddings. The operator-semantic strategy persists
+an existing checksum-identified human-assisted sidecar and calls only direct Ollama embeddings;
+it must never claim or invoke vision. Never create a MediaSession, SceneSegment, DerivedAsset or
+fake time range for a source image. Image Search is project-scoped and returns MediaAsset
+IDs/content URLs without vectors, storage URIs, host paths or temporal coordinates. Tests use fake
+providers; real image analysis is an explicit one-image smoke only.
 
 Hybrid Visual Sources integration with Ideas Hub and the Orchestrator is now active. Preserve the
 Image Search/materialization contracts and provenance indexes without adding editorial ranking,
