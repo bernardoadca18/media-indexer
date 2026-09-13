@@ -11,6 +11,43 @@ from uuid import UUID, uuid4
 from fastapi import UploadFile
 
 
+def is_mount_point(path: Path) -> bool:
+    """
+    Check if a path is a real mount point (bind mount, device, etc.).
+
+    This is more reliable than os.path.ismount() for detecting Docker bind mounts.
+    Docker bind mounts appear in /proc/self/mountinfo with the container path.
+
+    Returns True if the path is a mount point, False otherwise.
+    """
+    path = path.resolve()
+
+    # First check if path exists - if not, it's definitely not a mount
+    if not path.exists():
+        return False
+
+    # Check /proc/self/mountinfo for Linux
+    mountinfo_path = Path("/proc/self/mountinfo")
+    if mountinfo_path.exists():
+        try:
+            content = mountinfo_path.read_text()
+            # mountinfo format: fields separated by spaces, 5th field is mount point
+            for line in content.strip().split("\n"):
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) >= 5:
+                    mount_point = parts[4]
+                    if Path(mount_point).resolve() == path:
+                        return True
+            return False
+        except (OSError, IndexError):
+            pass
+
+    # Fallback to os.path.ismount for non-Linux or if mountinfo fails
+    return os.path.ismount(str(path))
+
+
 @dataclass(frozen=True)
 class StoredObject:
     uri: str
@@ -107,9 +144,26 @@ def _ensure_managed_parent(root: Path, relative_parent: PurePosixPath) -> Path:
 
 
 class LocalStorage:
-    def __init__(self, root: Path, root_hdd: Path | None = None):
+    def __init__(
+        self,
+        root: Path,
+        root_hdd: Path | None = None,
+        validate_hdd_mount: bool = True,
+    ):
         self.root = root.resolve()
         self.root_hdd = root_hdd.resolve() if root_hdd else None
+
+        # Fail-closed validation: if HDD storage is configured, it MUST be a real mount
+        # This prevents writing large files to Docker's writable layer (SSD)
+        if self.root_hdd is not None and validate_hdd_mount:
+            if not is_mount_point(self.root_hdd):
+                raise RuntimeError(
+                    f"HDD storage path '{self.root_hdd}' is not a mount point. "
+                    "This indicates the HDD bind mount is missing or misconfigured. "
+                    "Verify that MEDIA_INDEXER_HDD_HOST_PATH is set correctly and "
+                    "the Docker container has the proper bind mount. "
+                    "Refusing to start to prevent SSD disk overflow."
+                )
 
     async def save_source(
         self, project_id: UUID, session_id: UUID, upload: UploadFile

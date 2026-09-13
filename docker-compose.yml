@@ -36,6 +36,8 @@ services:
       STORAGE_HDD_THRESHOLD_BYTES: ${STORAGE_HDD_THRESHOLD_BYTES:-104857600}
       # Indicator that HDD mount is present (set when MEDIA_INDEXER_HDD_HOST_PATH is configured)
       MEDIA_INDEXER_HDD_MOUNT_PATH: ${MEDIA_INDEXER_HDD_HOST_PATH:+/data/media-hdd}
+      # Temp directory for large file operations (HDD-backed)
+      TEMP_ROOT: /data/tmp
       WORKER_ENABLED: ${WORKER_ENABLED:-true}
       JOB_STALE_TIMEOUT_SECONDS: ${JOB_STALE_TIMEOUT_SECONDS:-300}
       JOB_HEARTBEAT_INTERVAL_SECONDS: ${JOB_HEARTBEAT_INTERVAL_SECONDS:-30}
@@ -107,6 +109,8 @@ services:
     volumes:
       - "${MEDIA_INDEXER_STORAGE_HOST_PATH:-./storage}:/data/storage"
       - "media-indexer-model-cache:/data/models"
+      # Temp directory for large file operations (HDD-backed)
+      - "${MEDIA_INDEXER_TEMP_HOST_PATH:-${MEDIA_INDEXER_STORAGE_HOST_PATH:-./storage}/../tmp}:/data/tmp:rw"
     # Optional HDD storage: uncomment the volume mount below and set MEDIA_INDEXER_HDD_HOST_PATH
     # in your .env file to enable secondary storage for large files
     # volumes_additional:
@@ -145,6 +149,8 @@ services:
       - "${MEDIA_INDEXER_STORAGE_HOST_PATH:-./storage}:/data/storage"
       - "media-indexer-model-cache:/data/models"
       - "${MEDIA_INDEXER_HDD_HOST_PATH:?Set MEDIA_INDEXER_HDD_HOST_PATH in .env}:/data/media-hdd:rw"
+      # Temp directory for large file operations (HDD-backed)
+      - "${MEDIA_INDEXER_TEMP_HOST_PATH:-${MEDIA_INDEXER_STORAGE_HOST_PATH:-./storage}/../tmp}:/data/tmp:rw"
 volumes:
   media-indexer-db-data:
   media-indexer-model-cache:

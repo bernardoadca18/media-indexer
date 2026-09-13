@@ -55,13 +55,14 @@ def test_get_storage_succeeds_when_both_hdd_configured_or_neither(monkeypatch, t
     # Clear the lru_cache to allow fresh evaluation
     get_storage.cache_clear()
 
-    # Case 1: Both configured
+    # Case 1: Both configured - mock is_mount_point to return True for test path
     settings_both = Settings(
         storage_root=str(tmp_path / "primary"),
         storage_root_hdd=str(tmp_path / "hdd"),
         media_indexer_hdd_mount_path="/host/media-hdd",
     )
     monkeypatch.setattr("app.api.dependencies.settings", settings_both)
+    monkeypatch.setattr("app.services.storage.is_mount_point", lambda p: True)
     storage = get_storage()
     assert storage is not None
 

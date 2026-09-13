@@ -85,7 +85,7 @@ async def test_hdd_storage_saves_to_secondary_location(tmp_path: Path) -> None:
 
     chunks = [b"x" * 500_000, b"y" * 500_000]
     upload = ChunkedUpload(chunks)
-    storage = LocalStorage(primary, root_hdd=hdd)
+    storage = LocalStorage(primary, root_hdd=hdd, validate_hdd_mount=False)
 
     project_id, session_id = uuid4(), uuid4()
     stored = await storage.save_source_hdd(project_id, session_id, upload)  # type: ignore[arg-type]
@@ -110,7 +110,7 @@ async def test_hdd_storage_read_bytes(tmp_path: Path) -> None:
 
     chunks = [b"test content for hdd"]
     upload = ChunkedUpload(chunks)
-    storage = LocalStorage(primary, root_hdd=hdd)
+    storage = LocalStorage(primary, root_hdd=hdd, validate_hdd_mount=False)
 
     project_id, session_id = uuid4(), uuid4()
     stored = await storage.save_source_hdd(project_id, session_id, upload)  # type: ignore[arg-type]
@@ -125,7 +125,7 @@ def test_hdd_storage_rejects_escaping_uri(tmp_path: Path) -> None:
     primary.mkdir()
     hdd.mkdir()
 
-    storage = LocalStorage(primary, root_hdd=hdd)
+    storage = LocalStorage(primary, root_hdd=hdd, validate_hdd_mount=False)
     with pytest.raises(ValueError, match="escapes root"):
         storage.resolve_hdd("local-hdd://../../outside")
 
@@ -138,7 +138,7 @@ def test_resolve_any_supports_hdd(tmp_path: Path) -> None:
     expected = hdd / "managed" / "source.mp4"
     expected.parent.mkdir()
     expected.write_bytes(b"hdd")
-    storage = LocalStorage(primary, root_hdd=hdd)
+    storage = LocalStorage(primary, root_hdd=hdd, validate_hdd_mount=False)
 
     assert storage.resolve_any("local-hdd://managed/source.mp4") == expected
 
@@ -148,7 +148,7 @@ def test_resolve_any_rejects_escaping_hdd(tmp_path: Path) -> None:
     hdd = tmp_path / "hdd"
     primary.mkdir()
     hdd.mkdir()
-    storage = LocalStorage(primary, root_hdd=hdd)
+    storage = LocalStorage(primary, root_hdd=hdd, validate_hdd_mount=False)
 
     with pytest.raises(ValueError, match="escapes root"):
         storage.resolve_any("local-hdd://../../outside")
@@ -197,7 +197,7 @@ async def test_hdd_physical_write_readback_smoke(tmp_path: Path) -> None:
     chunks = [test_data[i : i + chunk_size] for i in range(0, len(test_data), chunk_size)]
     upload = ChunkedUpload(chunks)
 
-    storage = LocalStorage(primary, root_hdd=hdd)
+    storage = LocalStorage(primary, root_hdd=hdd, validate_hdd_mount=False)
     project_id, session_id = uuid4(), uuid4()
 
     # Write to HDD storage

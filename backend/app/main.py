@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -29,6 +30,26 @@ from app.services.model_gateway import model_gateway
 from app.workers.runner import job_runner
 
 configure_logging(settings.log_level)
+
+
+def configure_temp_directory() -> None:
+    """
+    Configure temp directory for large file operations.
+
+    If temp_root is set, use it as the temp directory (should be HDD-backed).
+    This ensures large uploads, ffmpeg operations, and other temp files
+    go to the HDD instead of the SSD-backed default /tmp.
+    """
+    if settings.temp_root is not None:
+        temp_path = settings.temp_root.resolve()
+        temp_path.mkdir(parents=True, exist_ok=True)
+        os.environ["TMPDIR"] = str(temp_path)
+        os.environ["TMP"] = str(temp_path)
+        os.environ["TEMP"] = str(temp_path)
+
+
+# Configure temp directory early, before any temp file operations
+configure_temp_directory()
 
 
 def create_app(start_worker: bool | None = None) -> FastAPI:
