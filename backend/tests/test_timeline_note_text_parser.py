@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.timeline_note_text_parser import parse_timeline_text
 
 
@@ -12,7 +14,9 @@ def test_parses_supported_timestamp_and_separator_variants() -> None:
             ]
         )
     )
-    assert [(item.start_seconds, item.end_seconds, item.description) for item in result.observations] == [
+    assert [
+        (item.start_seconds, item.end_seconds, item.description) for item in result.observations
+    ] == [
         (1.0, 14.0, "descrição um"),
         (14.0, 22.0, "descrição dois"),
         (3723.0, 3729.0, "descrição três"),
@@ -47,6 +51,7 @@ def test_rejects_range_past_media_duration() -> None:
     assert result.invalid_lines[0].reason == "end exceeds media duration"
 
 
+@pytest.mark.external
 def test_real_timeline_produces_many_structured_observations() -> None:
     path = "/media/bernardo/HDD500GB1/gameFootage/gta_iv/000.txt"
     with open(path, encoding="utf-8") as handle:

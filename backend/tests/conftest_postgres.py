@@ -9,7 +9,7 @@ interference with unit tests.
 
 The database should be created and migrated via alembic before running tests:
     docker exec media-indexer-db-1 psql -U media_indexer -d postgres -c "CREATE DATABASE media_indexer_test;"
-    POSTGRES_TEST_URL="postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test" alembic upgrade head
+    DATABASE_URL="postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test" alembic upgrade head
 """
 
 import os

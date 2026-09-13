@@ -77,6 +77,7 @@ time range for a source image. Image Search is project-scoped and returns MediaA
 URLs without vectors, storage URIs, host paths or temporal coordinates. Tests use fake providers;
 real image analysis is an explicit one-image smoke only.
 
-The next roadmap phase is Integration with Ideas Hub / game_analysis workflow.
-Do not add editorial ranking, script generation, composition or rendering in
-advance.
+Hybrid Visual Sources integration with Ideas Hub and the Orchestrator is now active. Preserve the
+Image Search/materialization contracts and provenance indexes without adding editorial ranking,
+script generation, composition, or rendering. Video Composer Professionalization is the next
+cross-system phase and does not expand Media Indexer ownership.

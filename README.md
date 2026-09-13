@@ -68,7 +68,7 @@ Comportamento que depende de PostgreSQL/pgvector é marcado `postgres` e usa um 
 explicitamente preparado, nunca o banco do operador:
 
 ```bash
-POSTGRES_TEST_URL=postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test \
+DATABASE_URL=postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test \
   alembic upgrade head
 POSTGRES_TEST_URL=postgresql+asyncpg://media_indexer:media_indexer@localhost:5435/media_indexer_test \
   pytest --postgres -m postgres
@@ -100,6 +100,23 @@ not sessions, derived video frames or temporal segments, and therefore have no
 duration or timestamps. Ingestion validates detected MIME/format and the whole
 image payload, extracts dimensions, streams to managed storage and deduplicates
 by project plus SHA-256.
+
+Provenance taxonomy is intentionally orthogonal: `asset_class` classifies the asset
+(`official_screenshot`, `official_artwork`, `official_promotional`), `collection` groups an
+operator-managed corpus (`screenshots`, `artwork_wallpapers`, `vintage_vice_city_pack`), and
+`game` identifies the title. A collection name is not a game identifier.
+
+Because image identity is `(project_id, SHA-256)` and provenance is immutable 1:1, batch operators
+should hash inputs before ingestion and resolve duplicate files assigned to different intended
+collections/provenance. The API deliberately returns a conflict rather than choosing which
+provenance wins. `scripts/batch_ingest_images.py` reports created/reused uploads and surfaces a
+conflict as a per-file failure, but does not mutate provenance or resolve cross-provenance
+duplicates automatically.
+
+Migration `0012_provenance_indexes` preserves the original asset-class index under the precise
+name `ix_media_asset_provenance_project_asset_class` and adds
+`ix_media_asset_provenance_project_source_class`. Owner, collection, and game indexes from `0011`
+remain unchanged; Image Search semantics are unaffected.
 
 The request accepts immutable operator provenance separately from model
 observation:

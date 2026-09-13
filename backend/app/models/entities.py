@@ -72,7 +72,8 @@ class MediaAssetProvenance(Base, UUIDPrimaryKey):
     __table_args__ = (
         UniqueConstraint("media_id", name="uq_media_asset_provenance_media"),
         Index("ix_media_asset_provenance_project_owner", "project_id", "source_owner"),
-        Index("ix_media_asset_provenance_project_class", "project_id", "asset_class"),
+        Index("ix_media_asset_provenance_project_asset_class", "project_id", "asset_class"),
+        Index("ix_media_asset_provenance_project_source_class", "project_id", "source_class"),
         Index("ix_media_asset_provenance_project_collection", "project_id", "collection"),
         Index("ix_media_asset_provenance_project_game", "project_id", "game"),
     )
@@ -277,9 +278,7 @@ class ImageSemanticIndex(Base, UUIDPrimaryKey, TimestampMixin):
         UniqueConstraint(
             "media_id", "configuration_fingerprint", name="uq_image_index_media_config"
         ),
-        CheckConstraint(
-            "embedding_dimensions = 1024", name="ck_image_index_embedding_dimensions"
-        ),
+        CheckConstraint("embedding_dimensions = 1024", name="ck_image_index_embedding_dimensions"),
         CheckConstraint(
             "status != 'completed' OR "
             "(semantic_result IS NOT NULL AND canonical_search_text IS NOT NULL "

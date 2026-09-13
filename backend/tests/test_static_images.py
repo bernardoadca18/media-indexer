@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import UploadFile
 from PIL import Image
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 from starlette.datastructures import Headers
 
@@ -162,9 +162,7 @@ async def test_image_ingestion_is_content_idempotent_and_provenance_immutable(
         files={"image": ("again.png", content, "image/png")},
     )
     assert conflict.status_code == 409
-    provenance = await client.get(
-        f"/media-assets/{first.json()['media_asset']['id']}/provenance"
-    )
+    provenance = await client.get(f"/media-assets/{first.json()['media_asset']['id']}/provenance")
     assert provenance.status_code == 200
     assert provenance.json()["source_owner"] == "owner"
     async with session_factory() as db:
@@ -267,9 +265,7 @@ async def test_provider_and_embedding_failures_are_durable_and_retry_resumes(
         assert ingested.media.media_kind == "image"
 
         vision.fail = False
-        retry = await ImageSemanticIndexService(db, 3).ensure(
-            ingested.media.id, semantic_request()
-        )
+        retry = await ImageSemanticIndexService(db, 3).ensure(ingested.media.id, semantic_request())
         assert retry.enqueue and retry.semantic_index.id == ensured.semantic_index.id
         assert await JobExecutor(db, registry).execute(retry.job.id)
         await db.refresh(retry.semantic_index)
@@ -287,7 +283,9 @@ async def test_provider_and_embedding_failures_are_durable_and_retry_resumes(
             ingested.media.id, semantic_request(embedding_model="broken")
         )
         assert await JobExecutor(db, registry).execute(resumed.job.id)
-        assert vision.call_count == 3  # persisted structured output avoids a second paid vision call
+        assert (
+            vision.call_count == 3
+        )  # persisted structured output avoids a second paid vision call
 
 
 async def test_image_index_rejects_schema_dimension_and_exhausted_retry(
@@ -340,9 +338,7 @@ async def test_image_index_rejects_schema_dimension_and_exhausted_retry(
         )
         assert not await JobExecutor(db, registry).execute(ensured.job.id)
         with pytest.raises(ImageSemanticAttemptsExhaustedError):
-            await ImageSemanticIndexService(db, 1).ensure(
-                ingested.media.id, semantic_request()
-            )
+            await ImageSemanticIndexService(db, 1).ensure(ingested.media.id, semantic_request())
 
 
 class InvalidVisionProvider:
@@ -476,6 +472,38 @@ async def test_postgres_image_vector_search_and_provenance_immutability(
         project.id, ImageSearchRequest(query="red")
     )
     assert [result.media_id for result in response.results] == [red.media.id, blue.media.id]
+
+    indexes = {
+        row.indexname: row.indexdef
+        for row in (
+            await db.execute(
+                text(
+                    "SELECT indexname, indexdef FROM pg_indexes "
+                    "WHERE schemaname='public' AND tablename='media_asset_provenance'"
+                )
+            )
+        )
+    }
+    assert "(project_id, asset_class)" in indexes["ix_media_asset_provenance_project_asset_class"]
+    assert "(project_id, source_class)" in indexes["ix_media_asset_provenance_project_source_class"]
+
+    for field, value in {
+        "source_owner": "studio",
+        "source_class": "official",
+        "asset_class": "official_screenshot",
+        "collection": "screenshots",
+        "game": "generic game",
+    }.items():
+        filtered = await ImageSearchService(
+            db, FakeEmbeddingProvider(dimensions=1024)
+        ).search_project(
+            project.id,
+            ImageSearchRequest(query="red", filters={field: value}),
+        )
+        assert {item.media_id for item in filtered.results} == {
+            red.media.id,
+            blue.media.id,
+        }
 
     red.provenance.source_owner = "silently changed"
     with pytest.raises(DBAPIError, match="provenance is immutable"):
