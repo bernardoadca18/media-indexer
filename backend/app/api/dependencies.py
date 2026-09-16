@@ -61,9 +61,7 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 
 
 EmbeddingDep = Annotated[EmbeddingProvider, Depends(get_embedding_provider)]
-ImageSemanticProviderDep = Annotated[
-    ImageSemanticProvider, Depends(get_image_semantic_provider)
-]
+ImageSemanticProviderDep = Annotated[ImageSemanticProvider, Depends(get_image_semantic_provider)]
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 StorageDep = Annotated[Storage, Depends(get_storage)]

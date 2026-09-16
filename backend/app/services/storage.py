@@ -55,6 +55,13 @@ class StoredObject:
     sha256: str
 
 
+@dataclass(frozen=True)
+class LargeDerivedTarget:
+    uri: str
+    temporary_path: Path
+    final_path: Path
+
+
 class StorageLimitError(ValueError):
     pass
 
@@ -79,6 +86,16 @@ class Storage(Protocol):
         filename: str,
         content: bytes,
     ) -> StoredObject: ...
+    async def create_large_derived_target(
+        self,
+        source_uri: str,
+        project_id: UUID,
+        media_id: UUID,
+        derivative_identity: str,
+        filename: str,
+    ) -> LargeDerivedTarget: ...
+    async def promote_large_derived(self, target: LargeDerivedTarget) -> StoredObject: ...
+    async def discard_large_derived(self, target: LargeDerivedTarget) -> None: ...
     async def delete_derived_namespace(
         self,
         project_id: UUID,
@@ -115,6 +132,30 @@ def _write_atomic(target: Path, content: bytes) -> None:
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _hash_file(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            size += len(chunk)
+            digest.update(chunk)
+    return size, digest.hexdigest()
+
+
+def _promote_large_derived(target: LargeDerivedTarget) -> StoredObject:
+    with target.temporary_path.open("rb+") as stream:
+        stream.flush()
+        os.fsync(stream.fileno())
+    byte_size, sha256 = _hash_file(target.temporary_path)
+    os.replace(target.temporary_path, target.final_path)
+    directory_fd = os.open(target.final_path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return StoredObject(target.uri, byte_size, sha256)
 
 
 def _delete_tree(path: Path) -> None:
@@ -237,7 +278,9 @@ class LocalStorage:
             raise ValueError(f"Invalid HDD storage URI: {uri}")
         if self.root_hdd is None:
             raise ValueError("HDD storage not configured")
-        candidate = self.root_hdd.joinpath(*PurePosixPath(uri[len("local-hdd://") :]).parts).resolve()
+        candidate = self.root_hdd.joinpath(
+            *PurePosixPath(uri[len("local-hdd://") :]).parts
+        ).resolve()
         if not candidate.is_relative_to(self.root_hdd):
             raise ValueError("storage URI escapes root")
         return candidate
@@ -326,6 +369,51 @@ class LocalStorage:
             len(content),
             hashlib.sha256(content).hexdigest(),
         )
+
+    async def create_large_derived_target(
+        self,
+        source_uri: str,
+        project_id: UUID,
+        media_id: UUID,
+        derivative_identity: str,
+        filename: str,
+    ) -> LargeDerivedTarget:
+        safe_identity = _safe_component(derivative_identity)
+        safe_filename = _safe_component(filename)
+        if source_uri.startswith("local-hdd://"):
+            if self.root_hdd is None:
+                raise ValueError("HDD storage not configured")
+            root = self.root_hdd
+            scheme = "local-hdd://"
+        elif source_uri.startswith("local://"):
+            root = self.root
+            scheme = "local://"
+        else:
+            raise ValueError("unsupported source storage URI")
+        relative = PurePosixPath(
+            "projects",
+            str(project_id),
+            "media",
+            str(media_id),
+            "derived",
+            "temporal",
+            safe_identity,
+            safe_filename,
+        )
+        parent = await asyncio.to_thread(_ensure_managed_parent, root, relative.parent)
+        final_path = parent / safe_filename
+        temporary_path = final_path.with_name(f".{safe_filename}.{uuid4().hex}.tmp")
+        return LargeDerivedTarget(
+            uri=f"{scheme}{relative.as_posix()}",
+            temporary_path=temporary_path,
+            final_path=final_path,
+        )
+
+    async def promote_large_derived(self, target: LargeDerivedTarget) -> StoredObject:
+        return await asyncio.to_thread(_promote_large_derived, target)
+
+    async def discard_large_derived(self, target: LargeDerivedTarget) -> None:
+        await asyncio.to_thread(target.temporary_path.unlink, missing_ok=True)
 
     async def delete_derived_namespace(
         self,

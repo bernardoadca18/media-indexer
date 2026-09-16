@@ -102,6 +102,16 @@ class Settings(BaseSettings):
         normalized = value.strip()
         return normalized or None
 
+    @field_validator("storage_root_hdd", "media_indexer_hdd_mount_path", "temp_root", mode="before")
+    @classmethod
+    def normalize_optional_path(cls, value: str | Path | None) -> Path | None:
+        if value is None:
+            return None
+        if isinstance(value, Path):
+            return value
+        stripped = value.strip()
+        return Path(stripped) if stripped else None
+
     @field_validator("ninerouter_base_url")
     @classmethod
     def validate_ninerouter_base_url(cls, value: str) -> str:

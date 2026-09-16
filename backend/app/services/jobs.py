@@ -14,6 +14,7 @@ from app.models import (
     ImageSemanticIndex,
     MediaSession,
     ProcessingJob,
+    TemporalDerivative,
     TemporalIndex,
     Transcription,
     VisualIndex,
@@ -93,9 +94,7 @@ class JobExecutor:
             provider_route = None
             if job is not None:
                 if job.image_semantic_index_id is not None:
-                    image_index = await self.db.get(
-                        ImageSemanticIndex, job.image_semantic_index_id
-                    )
+                    image_index = await self.db.get(ImageSemanticIndex, job.image_semantic_index_id)
                     provider_route = image_index.vision_model if image_index is not None else None
                 await self._fail(job, str(exc)[:4000])
             logger.exception(
@@ -163,13 +162,17 @@ class JobExecutor:
                         alignment_run.status = "pending"
                         alignment_run.completed_at = None
                 elif job.image_semantic_index_id is not None:
-                    image_index = await self.db.get(
-                        ImageSemanticIndex, job.image_semantic_index_id
-                    )
+                    image_index = await self.db.get(ImageSemanticIndex, job.image_semantic_index_id)
                     if image_index is not None:
                         image_index.status = "pending"
                         image_index.error = None
                         image_index.completed_at = None
+                elif job.temporal_derivative_id is not None:
+                    derivative = await self.db.get(TemporalDerivative, job.temporal_derivative_id)
+                    if derivative is not None:
+                        derivative.status = "pending"
+                        derivative.error = None
+                        derivative.completed_at = None
             recovered.append(job.id)
         await self.db.commit()
         return recovered
@@ -223,6 +226,12 @@ class JobExecutor:
                 image_index.status = "failed"
                 image_index.error = error
                 image_index.completed_at = datetime.now(UTC)
+        elif job.temporal_derivative_id is not None:
+            derivative = await self.db.get(TemporalDerivative, job.temporal_derivative_id)
+            if derivative is not None:
+                derivative.status = "failed"
+                derivative.error = error
+                derivative.completed_at = datetime.now(UTC)
         elif job.job_type == "initial_index":
             session = (
                 await self.db.get(MediaSession, job.session_id)

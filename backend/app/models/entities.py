@@ -267,6 +267,57 @@ class DerivedAsset(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TemporalDerivative(Base, UUIDPrimaryKey, TimestampMixin):
+    """Immutable, versioned video derivative materialized next to its canonical source."""
+
+    __tablename__ = "temporal_derivatives"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_media_id", "identity", name="uq_temporal_derivatives_media_identity"
+        ),
+        CheckConstraint("source_start_microseconds >= 0", name="ck_derivative_start_nonnegative"),
+        CheckConstraint(
+            "source_end_microseconds > source_start_microseconds",
+            name="ck_derivative_valid_range",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="ck_derivative_status",
+        ),
+        CheckConstraint(
+            "status != 'completed' OR (storage_uri IS NOT NULL AND sha256 IS NOT NULL "
+            "AND byte_size IS NOT NULL AND duration_seconds IS NOT NULL AND width IS NOT NULL "
+            "AND height IS NOT NULL AND fps IS NOT NULL AND codec IS NOT NULL)",
+            name="ck_derivative_completed_outputs",
+        ),
+        Index("ix_temporal_derivatives_media_created", "source_media_id", "created_at"),
+        Index("ix_temporal_derivatives_status_created", "status", "created_at"),
+    )
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("media_projects.id", ondelete="CASCADE"))
+    source_media_id: Mapped[UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"))
+    identity: Mapped[str] = mapped_column(String(64))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    source_start_microseconds: Mapped[int] = mapped_column(BigInteger)
+    source_end_microseconds: Mapped[int] = mapped_column(BigInteger)
+    profile_id: Mapped[str] = mapped_column(String(100))
+    profile_identity: Mapped[str] = mapped_column(String(64))
+    strategy_version: Mapped[str] = mapped_column(String(100))
+    specification: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    storage_uri: Mapped[str | None] = mapped_column(String(1000), unique=True)
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    byte_size: Mapped[int | None] = mapped_column(BigInteger)
+    duration_seconds: Mapped[float | None] = mapped_column(Float)
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    fps: Mapped[float | None] = mapped_column(Float)
+    codec: Mapped[str | None] = mapped_column(String(100))
+    generation_seconds: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 EMBEDDING_VECTOR_DIMENSIONS = 1024
 
 
@@ -623,12 +674,18 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     __tablename__ = "processing_jobs"
     __table_args__ = (
         CheckConstraint(
-            "session_id IS NOT NULL OR image_semantic_index_id IS NOT NULL",
-            name="ck_processing_job_session_or_image",
+            "session_id IS NOT NULL OR image_semantic_index_id IS NOT NULL "
+            "OR temporal_derivative_id IS NOT NULL",
+            name="ck_processing_job_owner",
         ),
         CheckConstraint(
             "image_semantic_index_id IS NULL OR session_id IS NULL",
             name="ck_processing_job_image_without_session",
+        ),
+        CheckConstraint(
+            "temporal_derivative_id IS NULL OR (session_id IS NULL "
+            "AND image_semantic_index_id IS NULL)",
+            name="ck_processing_job_derivative_without_other_owner",
         ),
         Index("ix_processing_jobs_status_created", "status", "created_at"),
     )
@@ -651,6 +708,9 @@ class ProcessingJob(Base, UUIDPrimaryKey, TimestampMixin):
     )
     image_semantic_index_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("image_semantic_indexes.id", ondelete="CASCADE")
+    )
+    temporal_derivative_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("temporal_derivatives.id", ondelete="CASCADE")
     )
     job_type: Mapped[str] = mapped_column(String(50), default="initial_index")
     status: Mapped[str] = mapped_column(String(30), default="pending")

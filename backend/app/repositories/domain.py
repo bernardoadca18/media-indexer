@@ -12,6 +12,7 @@ from app.models import (
     MediaProject,
     MediaSession,
     ProcessingJob,
+    TemporalDerivative,
 )
 
 
@@ -162,6 +163,15 @@ class JobRepository:
         )
         return result.scalar_one_or_none()
 
+    async def for_temporal_derivative(self, temporal_derivative_id: UUID) -> ProcessingJob | None:
+        result = await self.db.execute(
+            select(ProcessingJob)
+            .where(ProcessingJob.temporal_derivative_id == temporal_derivative_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def recoverable(self, stale_before: datetime) -> Sequence[ProcessingJob]:
         result = await self.db.execute(
             select(ProcessingJob)
@@ -180,3 +190,28 @@ class JobRepository:
             .order_by(ProcessingJob.created_at)
         )
         return result.scalars().all()
+
+
+class TemporalDerivativeRepository:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def get(self, derivative_id: UUID) -> TemporalDerivative | None:
+        return await self.db.get(TemporalDerivative, derivative_id)
+
+    async def by_identity(self, identity: str) -> TemporalDerivative | None:
+        result = await self.db.execute(
+            select(TemporalDerivative).where(TemporalDerivative.identity == identity)
+        )
+        return result.scalar_one_or_none()
+
+    async def by_media_and_identity(
+        self, media_id: UUID, identity: str
+    ) -> TemporalDerivative | None:
+        result = await self.db.execute(
+            select(TemporalDerivative).where(
+                TemporalDerivative.source_media_id == media_id,
+                TemporalDerivative.identity == identity,
+            )
+        )
+        return result.scalar_one_or_none()

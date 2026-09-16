@@ -16,6 +16,7 @@ from app.services.jobs import JobExecutor, ProcessorRegistry
 from app.services.probe import FFprobe
 from app.services.processing import InitialIndexProcessor
 from app.services.storage import LocalStorage
+from app.services.temporal_derivative import TemporalDerivativeProcessor
 from app.services.temporal_index import TemporalIndexProcessor
 from app.services.transcription import TranscriptionProcessor
 from app.services.transcription_provider import FasterWhisperProvider
@@ -39,9 +40,7 @@ def build_default_registry() -> ProcessorRegistry:
     frame_extractor = FFmpegFrameExtractor(settings.ffmpeg_binary)
     embedding_provider = ollama_embedding_provider
     alignment_provider = NinerouterMultimodalAlignmentProvider(settings.alignment_timeout_seconds)
-    image_semantic_provider = NinerouterImageSemanticProvider(
-        settings.image_vision_timeout_seconds
-    )
+    image_semantic_provider = NinerouterImageSemanticProvider(settings.image_vision_timeout_seconds)
     registry = ProcessorRegistry()
     registry.register(
         "initial_index",
@@ -64,6 +63,15 @@ def build_default_registry() -> ProcessorRegistry:
             scene_detector,
             frame_extractor,
             settings.visual_index_batch_size,
+        ),
+    )
+    registry.register(
+        "temporal_derivative",
+        lambda db: TemporalDerivativeProcessor(
+            db,
+            storage,
+            settings.ffmpeg_binary,
+            FFprobe(settings.ffprobe_binary),
         ),
     )
     registry.register(

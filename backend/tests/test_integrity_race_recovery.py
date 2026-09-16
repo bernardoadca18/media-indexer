@@ -4,10 +4,20 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 
 from app.repositories.alignment import AlignmentRepository
-from app.repositories.domain import JobRepository, SessionRepository
+from app.repositories.domain import (
+    JobRepository,
+    MediaAssetRepository,
+    SessionRepository,
+    TemporalDerivativeRepository,
+)
 from app.repositories.transcription import TranscriptionRepository
 from app.repositories.visual_index import VisualIndexRepository
+from app.schemas.temporal_derivative import (
+    TemporalDerivativeEnsureRequest,
+    TemporalDerivativeProfile,
+)
 from app.services.alignment import AlignmentConfig, AlignmentRequest, AlignmentService
+from app.services.temporal_derivative import TemporalDerivativeService, profile_fingerprint
 from app.services.transcription import TranscriptionRequest, TranscriptionService
 from app.services.visual_index import VisualIndexRequest, VisualIndexService
 
@@ -34,6 +44,9 @@ class IntegrityRaceDatabase:
         self.rolled_back = False
 
     def add(self, _value) -> None:
+        return None
+
+    async def execute(self, _stmt) -> None:
         return None
 
     async def flush(self) -> None:
@@ -146,5 +159,72 @@ async def test_alignment_integrity_race_does_not_read_expired_retrieval(monkeypa
     )
 
     assert result.alignment_run is concurrent
+    assert result.job is concurrent_job
+    assert not result.created
+
+
+async def test_temporal_derivative_integrity_race_reuses_concurrent_job(monkeypatch) -> None:
+    media = RollbackSensitiveRecord(
+        id=uuid4(),
+        project_id=uuid4(),
+        sha256="a" * 64,
+        media_kind="video",
+        duration_seconds=60.0,
+    )
+    database = IntegrityRaceDatabase(media)
+    concurrent = SimpleNamespace(id=uuid4())
+    concurrent_job = SimpleNamespace(id=uuid4())
+    derivative_profile = TemporalDerivativeProfile(
+        profile_id="render_proxy_1080p30_v2",
+        strategy_version="proxy_strategy_v2",
+        container="mp4",
+        codec="h264",
+        encoder_backend="libx264",
+        max_width=1920,
+        max_height=1080,
+        scaling_policy="fit_inside_even_dimensions",
+        never_upscale=True,
+        fps=30,
+        pixel_format="yuv420p",
+        quality_mode="crf",
+        crf=20,
+        preset="fast",
+        gop_frames=60,
+        keyframe_policy="fixed_closed_gop",
+        scenecut=False,
+        color_policy="bt709_passthrough",
+        audio_policy="remove",
+        subtitle_policy="remove",
+        data_policy="remove",
+        strip_metadata=True,
+        movflags="faststart",
+    )
+    request = TemporalDerivativeEnsureRequest(
+        contract_version="temporal_derivative_request_v1",
+        source_sha256=media.sha256,
+        source_start_microseconds=1_000_000,
+        source_end_microseconds=2_000_000,
+        profile_identity=profile_fingerprint(derivative_profile),
+        profile=derivative_profile,
+    )
+
+    async def get_media(_repository, _media_id):
+        return media
+
+    async def by_media_and_identity(_repository, _media_id, _identity):
+        return concurrent if database.rolled_back else None
+
+    async def for_derivative(_repository, _derivative_id):
+        return concurrent_job
+
+    monkeypatch.setattr(MediaAssetRepository, "get", get_media)
+    monkeypatch.setattr(TemporalDerivativeRepository, "by_media_and_identity", by_media_and_identity)
+    monkeypatch.setattr(JobRepository, "for_temporal_derivative", for_derivative)
+
+    result = await TemporalDerivativeService(database, SimpleNamespace(), 3).ensure(
+        media.id, request
+    )
+
+    assert result.derivative is concurrent
     assert result.job is concurrent_job
     assert not result.created

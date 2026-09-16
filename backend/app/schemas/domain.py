@@ -34,6 +34,7 @@ class NoteOut(ORMModel):
 
 class StructuredNoteIn(BaseModel):
     """Schema for creating/updating structured timeline notes."""
+
     order: int = Field(ge=1)
     raw: str = Field(min_length=1)
     start_seconds: float | None = Field(default=None, ge=0)
@@ -49,6 +50,7 @@ class StructuredNoteIn(BaseModel):
 
 class TimelineNoteObservation(BaseModel):
     """Single observation for bulk import."""
+
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
     description: str = Field(min_length=1)
@@ -61,6 +63,7 @@ class TimelineNoteObservation(BaseModel):
 
 class TimelineNotesImportRequest(BaseModel):
     """Bulk import request for timeline notes."""
+
     version: str = Field(pattern="^timeline_notes_v1$")
     provenance: str = Field(default="manual_import", min_length=1)
     observations: list[TimelineNoteObservation] = Field(min_length=1)
@@ -68,6 +71,7 @@ class TimelineNotesImportRequest(BaseModel):
 
 class TimelineNotesImportResult(BaseModel):
     """Result of bulk timeline notes import."""
+
     imported_count: int
     skipped_count: int
     errors: list[str] | None = None
@@ -157,6 +161,7 @@ class JobOut(ORMModel):
     media_id: UUID
     transcription_id: UUID | None
     image_semantic_index_id: UUID | None
+    temporal_derivative_id: UUID | None
     job_type: str
     visual_index_id: UUID | None
     status: str

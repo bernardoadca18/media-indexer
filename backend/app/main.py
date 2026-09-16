@@ -18,6 +18,7 @@ from app.api.routers import (
     projects,
     semantic_timeline,
     sessions,
+    temporal_derivatives,
     temporal_indexes,
     timeline_notes,
     transcriptions,
@@ -110,6 +111,7 @@ def create_app(start_worker: bool | None = None) -> FastAPI:
     application.include_router(timeline_notes.router)
     application.include_router(visual_indexes.router)
     application.include_router(temporal_indexes.router)
+    application.include_router(temporal_derivatives.router)
     application.include_router(candidate_retrieval.router)
     application.include_router(images.router)
     application.include_router(image_search.router)
