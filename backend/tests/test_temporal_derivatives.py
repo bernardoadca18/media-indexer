@@ -352,36 +352,47 @@ async def test_cross_media_same_sha_allows_independent_derivatives(
 async def test_corrupted_completed_derivative_is_detected_and_regenerated(
     session_factory, tmp_path: Path
 ) -> None:
-    """A derivative with matching size but wrong SHA must be regenerated."""
+    """A derivative with matching size but wrong SHA must be detected and regenerated."""
     async with session_factory() as db:
         media = await add_media(db, tmp_path)
         storage = LocalStorage(tmp_path)
         service = TemporalDerivativeService(db, storage, 3)
 
         result = await service.ensure(media.id, request(media.sha256))
-        processor = TemporalDerivativeProcessor(db, storage, "ffmpeg", FFprobe("ffprobe"))
-        await processor.run(result.job)
+        registry = ProcessorRegistry(
+            {
+                "temporal_derivative": lambda active_db: TemporalDerivativeProcessor(
+                    active_db, storage, "ffmpeg", FFprobe("ffprobe")
+                )
+            }
+        )
+        await JobExecutor(db, registry).execute(result.job.id)
         await db.refresh(result.derivative)
+        await db.refresh(result.job)
 
         assert result.derivative.status == "completed"
+        assert result.job.status == "completed"
         original_sha = result.derivative.sha256
         storage_uri = result.derivative.storage_uri
         assert storage_uri is not None
 
-        # Corrupt the file (same size, wrong content)
+        # Corrupt the file (same size, wrong content) WITHOUT modifying derivative status
         derivative_path = storage.resolve_any(storage_uri)
         original_size = derivative_path.stat().st_size
         corrupt_content = b"\xDE\xAD\xBE\xEF" * (original_size // 4)
         corrupt_content = corrupt_content[:original_size]
         derivative_path.write_bytes(corrupt_content)
 
-        # Reset derivative to pending to simulate re-ensure
-        result.derivative.status = "pending"
-        await db.commit()
-
-        # Re-ensure should detect corruption and regenerate
+        # Re-ensure should detect corruption via SHA-256 mismatch and schedule retry
         result2 = await service.ensure(media.id, request(media.sha256))
-        await processor.run(result2.job)
+        assert result2.derivative.id == result.derivative.id
+        assert result2.derivative.status == "pending"
+        assert result2.job.status == "pending"
+        assert result2.enqueue is True
+        assert not result2.created
+
+        # Execute the regeneration
+        await JobExecutor(db, registry).execute(result2.job.id)
         await db.refresh(result2.derivative)
 
         assert result2.derivative.status == "completed"

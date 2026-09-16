@@ -34,8 +34,7 @@ services:
       STORAGE_ROOT: ${STORAGE_ROOT:-/data/storage}
       STORAGE_ROOT_HDD: ${STORAGE_ROOT_HDD:-}
       STORAGE_HDD_THRESHOLD_BYTES: ${STORAGE_HDD_THRESHOLD_BYTES:-104857600}
-      # Indicator that HDD mount is present (set when MEDIA_INDEXER_HDD_HOST_PATH is configured)
-      MEDIA_INDEXER_HDD_MOUNT_PATH: ${MEDIA_INDEXER_HDD_HOST_PATH:+/data/media-hdd}
+      # HDD storage is disabled in base api service; use api-hdd service with --profile hdd
       # Temp directory for large file operations (HDD-backed)
       TEMP_ROOT: /data/tmp
       TMPDIR: /data/tmp
