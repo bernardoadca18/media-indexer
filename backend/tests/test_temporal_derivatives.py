@@ -379,8 +379,9 @@ async def test_corrupted_completed_derivative_is_detected_and_regenerated(
         # Corrupt the file (same size, wrong content) WITHOUT modifying derivative status
         derivative_path = storage.resolve_any(storage_uri)
         original_size = derivative_path.stat().st_size
-        corrupt_content = b"\xDE\xAD\xBE\xEF" * (original_size // 4)
+        corrupt_content = b"\xDE\xAD\xBE\xEF" * ((original_size + 3) // 4)
         corrupt_content = corrupt_content[:original_size]
+        assert len(corrupt_content) == original_size
         derivative_path.write_bytes(corrupt_content)
 
         # Re-ensure should detect corruption via SHA-256 mismatch and schedule retry

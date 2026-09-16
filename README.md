@@ -730,3 +730,24 @@ Or session-specific:
 
 The evaluation script uses the configured direct Ollama model. Deterministic
 tests inject a fake provider explicitly; production commands do not fail over locally.
+
+### Local HDD service and integrated deployment
+
+For local Compose, set `MEDIA_INDEXER_HDD_HOST_PATH` and, when appropriate,
+`MEDIA_INDEXER_TEMP_HOST_PATH` in `.env`. Start the HDD variant explicitly:
+
+```bash
+docker compose --profile hdd up -d api-hdd
+```
+
+Stop an existing local `api` before switching variants: both expose the same port.
+The base `api` explicitly disables both `STORAGE_ROOT_HDD` and
+`MEDIA_INDEXER_HDD_MOUNT_PATH`, including values inherited from `.env`.
+`api-hdd` supplies both container-side paths as `/data/media-hdd` and binds the
+operator's host directory there. Do not add these container-side paths to `.env`.
+Mount-point validation remains mandatory.
+
+The `neovids-infra/infra/orchestration/media-indexer.yml` overlay intentionally
+uses the integrated `api` service instead: a nonempty host HDD path enables both
+container-side settings and the bind. Without it, both settings are empty; a
+placeholder named volume is mounted but is not enabled as an HDD backend.

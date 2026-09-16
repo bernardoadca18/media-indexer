@@ -32,7 +32,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://media_indexer:media_indexer@db:5432/media_indexer}
       STORAGE_ROOT: ${STORAGE_ROOT:-/data/storage}
-      STORAGE_ROOT_HDD: ${STORAGE_ROOT_HDD:-}
+      STORAGE_ROOT_HDD: ""
+      MEDIA_INDEXER_HDD_MOUNT_PATH: ""
       STORAGE_HDD_THRESHOLD_BYTES: ${STORAGE_HDD_THRESHOLD_BYTES:-104857600}
       # HDD storage is disabled in base api service; use api-hdd service with --profile hdd
       # Temp directory for large file operations (HDD-backed)
@@ -113,10 +114,6 @@ services:
       - "media-indexer-model-cache:/data/models"
       # Temp directory for large file operations (HDD-backed)
       - "${MEDIA_INDEXER_TEMP_HOST_PATH:-${MEDIA_INDEXER_STORAGE_HOST_PATH:-./storage}/../tmp}:/data/tmp:rw"
-    # Optional HDD storage: uncomment the volume mount below and set MEDIA_INDEXER_HDD_HOST_PATH
-    # in your .env file to enable secondary storage for large files
-    # volumes_additional:
-    #   - "${MEDIA_INDEXER_HDD_HOST_PATH}:/data/media-hdd:rw"
     depends_on:
       db:
         condition: service_healthy
@@ -138,7 +135,7 @@ services:
       retries: 12
       start_period: 30s
 
-  # HDD-enabled variant - use with: docker compose --profile hdd up
+  # HDD-enabled variant - use with: docker compose --profile hdd up -d api-hdd
   api-hdd:
     extends:
       service: api
@@ -167,7 +164,7 @@ networks:
     name: neovids
 
 # Optional HDD storage profile
-# Usage: docker compose --profile hdd up
+# Usage: docker compose --profile hdd up -d api-hdd
 # Requires: MEDIA_INDEXER_HDD_HOST_PATH set in .env
-# Also set: STORAGE_ROOT_HDD=/data/media-hdd
+# Container-side HDD paths are supplied by api-hdd, not by .env.
 # And set: STORAGE_HDD_THRESHOLD_BYTES=104857600 (or desired threshold)

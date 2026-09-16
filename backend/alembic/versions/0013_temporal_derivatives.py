@@ -59,9 +59,7 @@ def upgrade() -> None:
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
-        sa.UniqueConstraint(
-            "source_media_id", "identity", name="uq_temporal_derivatives_media_identity"
-        ),
+        sa.UniqueConstraint("identity", name="uq_temporal_derivatives_identity"),
         sa.CheckConstraint(
             "source_start_microseconds >= 0", name="ck_derivative_start_nonnegative"
         ),
