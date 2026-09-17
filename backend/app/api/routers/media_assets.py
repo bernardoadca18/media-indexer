@@ -1,3 +1,4 @@
+import asyncio
 import re
 from pathlib import Path
 from uuid import UUID
@@ -6,9 +7,15 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import DB, StorageDep
+from app.core.config import settings
 from app.models import MediaAsset
 from app.repositories.domain import MediaAssetRepository
 from app.schemas.domain import MediaAssetMetadataOut
+from app.services.video_window_quality import (
+    VideoWindowQuality,
+    VideoWindowRequest,
+    inspect_video_window,
+)
 
 router = APIRouter(prefix="/media-assets", tags=["media-assets"])
 
@@ -53,3 +60,31 @@ async def get_media_asset_content(media_id: UUID, db: DB, storage: StorageDep) -
             "X-Content-SHA256": item.sha256,
         },
     )
+
+
+@router.post("/{media_id}/video-window-quality", response_model=VideoWindowQuality)
+async def video_window_quality(
+    media_id: UUID,
+    request: VideoWindowRequest,
+    db: DB,
+    storage: StorageDep,
+) -> VideoWindowQuality:
+    item = await _managed_asset(media_id, db)
+    if item.media_kind != "video":
+        raise HTTPException(422, "Video window inspection requires a video asset")
+    if (
+        item.duration_seconds is None
+        or request.end_seconds > item.duration_seconds
+        or request.end_seconds - request.start_seconds > settings.candidate_max_duration_seconds
+    ):
+        raise HTTPException(422, "Window exceeds the asset or candidate duration limit")
+    try:
+        path = storage.resolve_any(item.storage_uri)
+    except ValueError as exc:
+        raise HTTPException(404, "Managed media content unavailable") from exc
+    if not path.is_file():
+        raise HTTPException(404, "Managed media content unavailable")
+    try:
+        return await asyncio.to_thread(inspect_video_window, path, request, settings.ffmpeg_binary)
+    except RuntimeError as exc:
+        raise HTTPException(503, "Video window inspection unavailable") from exc
