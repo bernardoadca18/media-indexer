@@ -3,14 +3,15 @@ import re
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 
 from app.api.dependencies import DB, StorageDep
 from app.core.config import settings
 from app.models import MediaAsset
 from app.repositories.domain import MediaAssetRepository
 from app.schemas.domain import MediaAssetMetadataOut
+from app.services.thumbnail_frame import extract_frame
 from app.services.video_window_quality import (
     VideoWindowQuality,
     VideoWindowRequest,
@@ -88,3 +89,31 @@ async def video_window_quality(
         return await asyncio.to_thread(inspect_video_window, path, request, settings.ffmpeg_binary)
     except RuntimeError as exc:
         raise HTTPException(503, "Video window inspection unavailable") from exc
+
+
+@router.get("/{media_id}/frame")
+async def get_media_asset_frame(
+    media_id: UUID,
+    db: DB,
+    storage: StorageDep,
+    timestamp_seconds: float = Query(ge=0, allow_inf_nan=False),
+    width: int = Query(default=1600, ge=160, le=1920),
+) -> Response:
+    item = await _managed_asset(media_id, db)
+    if item.media_kind != "video" or item.duration_seconds is None:
+        raise HTTPException(422, "Frame requires a video with known duration")
+    if timestamp_seconds >= item.duration_seconds:
+        raise HTTPException(422, "Timestamp exceeds video duration")
+    try:
+        path = storage.resolve_any(item.storage_uri)
+        if not path.is_file():
+            raise ValueError("Missing managed source")
+    except ValueError:
+        raise HTTPException(404, "Managed media content unavailable") from None
+    try:
+        data = await asyncio.to_thread(
+            extract_frame, path, timestamp_seconds, width, settings.ffmpeg_binary
+        )
+    except RuntimeError:
+        raise HTTPException(503, "Frame extraction unavailable") from None
+    return Response(data, media_type="image/jpeg", headers={"X-Source-SHA256": item.sha256})
