@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from pathlib import Path
 from uuid import UUID
@@ -19,6 +20,7 @@ from app.services.video_window_quality import (
 )
 
 router = APIRouter(prefix="/media-assets", tags=["media-assets"])
+logger = logging.getLogger(__name__)
 
 
 async def _managed_asset(media_id: UUID, db: DB) -> MediaAsset:
@@ -88,6 +90,14 @@ async def video_window_quality(
     try:
         return await asyncio.to_thread(inspect_video_window, path, request, settings.ffmpeg_binary)
     except RuntimeError as exc:
+        logger.exception(
+            "video window quality dependency failed",
+            extra={
+                "media_id": str(media_id),
+                "start_seconds": request.start_seconds,
+                "end_seconds": request.end_seconds,
+            },
+        )
         raise HTTPException(503, "Video window inspection unavailable") from exc
 
 

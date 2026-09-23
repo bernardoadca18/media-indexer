@@ -81,6 +81,25 @@ def test_ffmpeg_reads_only_requested_window(tmp_path):
     )
 
 
+def test_long_window_gets_bounded_decode_timeout(monkeypatch, tmp_path):
+    observed = []
+
+    def fake_run(*args, **kwargs):
+        observed.append(kwargs["timeout"])
+        duration = float(args[0][args[0].index("-t") + 1])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"frame=100\nout_time_us={int(duration * 1_000_000)}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("app.services.video_window_quality.subprocess.run", fake_run)
+    path = tmp_path / "managed.mkv"
+    inspect_video_window(path, VideoWindowRequest(start_seconds=0, end_seconds=15))
+    inspect_video_window(path, VideoWindowRequest(start_seconds=0, end_seconds=65))
+    assert observed == [25.0, 90.0]
+
+
 @pytest.mark.asyncio
 async def test_window_endpoint_resolves_managed_storage_and_rejects_out_of_bounds(
     monkeypatch, tmp_path

@@ -20,20 +20,16 @@ import hashlib
 import os
 import sys
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 from app.models import (
     EMBEDDING_VECTOR_DIMENSIONS,
-    Base,
-    DerivedAsset,
     MediaAsset,
     MediaProject,
     MediaSession,
@@ -130,6 +126,7 @@ async def create_transcription(
     await db.commit()
     await db.refresh(transcription)
 
+    assert media.duration_seconds is not None
     segment_duration = media.duration_seconds / segment_count
     for i in range(segment_count):
         segment = TranscriptSegment(
@@ -165,6 +162,7 @@ async def create_visual_index(
     await db.commit()
     await db.refresh(visual_index)
 
+    assert media.duration_seconds is not None
     scene_duration = media.duration_seconds / scene_count
     for i in range(scene_count):
         scene = SceneSegment(
@@ -208,6 +206,7 @@ async def create_temporal_index(
     await db.commit()
     await db.refresh(temporal_index)
 
+    assert media.duration_seconds is not None
     segment_duration = media.duration_seconds / segment_count
     for i in range(segment_count):
         text = f"{content_prefix}Temporal segment {i + 1} with Geralt learning Aard combat gameplay"
@@ -270,35 +269,35 @@ async def run_session_search_smoke(db: AsyncSession) -> bool:
         success = False
 
     if response.session_id != session.id:
-        log(f"  ERROR: Session ID mismatch")
+        log("  ERROR: Session ID mismatch")
         success = False
 
     if response.searched_sessions != 1:
-        log(f"  ERROR: Expected searched_sessions=1")
+        log("  ERROR: Expected searched_sessions=1")
         success = False
 
     if len(response.results) == 0:
-        log(f"  ERROR: Expected at least 1 result")
+        log("  ERROR: Expected at least 1 result")
         success = False
 
     # Check ranking
     if len(response.results) > 1:
         scores = [r.score for r in response.results]
         if scores != sorted(scores, reverse=True):
-            log(f"  ERROR: Results not ranked by score")
+            log("  ERROR: Results not ranked by score")
             success = False
 
     # Check result structure
     if response.results:
         result = response.results[0]
-        log(f"\n  Top result:")
+        log("\n  Top result:")
         log(f"    Session: {result.session_label}")
         log(f"    Range: {result.start_seconds:.1f}s - {result.end_seconds:.1f}s")
         log(f"    Score: {result.score:.3f}")
         log(f"    Rank: {result.rank}")
 
         if result.session_id != session.id:
-            log(f"    ERROR: Result session_id mismatch")
+            log("    ERROR: Result session_id mismatch")
             success = False
 
     # Verify embedding was called only once
@@ -306,7 +305,7 @@ async def run_session_search_smoke(db: AsyncSession) -> bool:
         log(f"  ERROR: Expected 1 embedding call, got {provider.embed_call_count}")
         success = False
     else:
-        log(f"\n  ✓ Query embedded exactly once")
+        log("\n  ✓ Query embedded exactly once")
 
     # Test zero results
     log("\nTesting zero results case...")
@@ -317,7 +316,7 @@ async def run_session_search_smoke(db: AsyncSession) -> bool:
         log(f"  ERROR: Expected 0 results, got {len(zero_response.results)}")
         success = False
     else:
-        log(f"  ✓ Zero results handled correctly")
+        log("  ✓ Zero results handled correctly")
 
     # Cleanup
     log("\nCleaning up test data...")
@@ -384,18 +383,18 @@ async def run_project_search_smoke(db: AsyncSession) -> bool:
         success = False
 
     if response.session_id is not None:
-        log(f"  ERROR: session_id should be None for project search")
+        log("  ERROR: session_id should be None for project search")
         success = False
 
     if response.searched_sessions < 1:
-        log(f"  ERROR: Expected at least 1 searched session")
+        log("  ERROR: Expected at least 1 searched session")
         success = False
 
     # Check global ranking
     if len(response.results) > 1:
         scores = [r.score for r in response.results]
         if scores != sorted(scores, reverse=True):
-            log(f"  ERROR: Results not globally ranked by score")
+            log("  ERROR: Results not globally ranked by score")
             success = False
 
         ranks = [r.rank for r in response.results]
@@ -406,17 +405,17 @@ async def run_project_search_smoke(db: AsyncSession) -> bool:
 
     # Check session summaries
     if not response.session_summaries:
-        log(f"  ERROR: Expected session summaries")
+        log("  ERROR: Expected session summaries")
         success = False
     else:
-        log(f"\n  Session summaries:")
+        log("\n  Session summaries:")
         for summary in response.session_summaries:
             status = "searched" if summary.searched else f"skipped: {summary.skip_reason}"
             log(f"    {summary.label}: {status} ({summary.result_count} results)")
 
     # Check results
     if response.results:
-        log(f"\n  Top results:")
+        log("\n  Top results:")
         for i, result in enumerate(response.results[:5]):
             log(f"    {i+1}. {result.session_label}: {result.start_seconds:.1f}s - {result.end_seconds:.1f}s (score={result.score:.3f})")
 
@@ -426,7 +425,7 @@ async def run_project_search_smoke(db: AsyncSession) -> bool:
         log(f"\n  ERROR: Expected {expected_embed_calls} embedding call(s), got {provider.embed_call_count}")
         success = False
     else:
-        log(f"\n  ✓ Query embedded exactly once for compatibility group")
+        log("\n  ✓ Query embedded exactly once for compatibility group")
 
     # Test session filter
     log("\nTesting session filter...")
@@ -439,11 +438,11 @@ async def run_project_search_smoke(db: AsyncSession) -> bool:
 
     for result in filter_response.results:
         if result.session_id != sessions[0].id:
-            log(f"  ERROR: Filtered result from wrong session")
+            log("  ERROR: Filtered result from wrong session")
             success = False
             break
     else:
-        log(f"  ✓ Session filter works correctly")
+        log("  ✓ Session filter works correctly")
 
     # Cleanup
     log("\nCleaning up test data...")

@@ -22,7 +22,8 @@ class EmbeddingDimensionError(ValueError):
 
 
 class EmbeddingProvider(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     async def embed(
         self,

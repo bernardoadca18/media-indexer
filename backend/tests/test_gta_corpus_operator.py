@@ -56,14 +56,19 @@ def corpus_tree(root: Path) -> None:
     write_image_pair(image_root / "GTAVI_Vintage_Vice_City_Pack" / "vintage.jpg", "yellow")
 
 
-def test_temporal_manifest_has_20_unique_canonical_labels(tmp_path: Path) -> None:
+def test_temporal_manifest_has_22_unique_canonical_labels(tmp_path: Path) -> None:
     labels = [item.label for item in _expected_videos(tmp_path)]
-    assert len(labels) == len(set(labels)) == 20
-    assert labels[:3] == [
+    assert len(labels) == len(set(labels)) == 22
+    assert labels[:5] == [
         "gta_iv_gameplay_ep000",
         "gta_iv_gameplay_ep001",
         "gta_iv_gameplay_ep002",
+        "gta_iv_gameplay_ep003",
+        "gta_iv_gameplay_ep004",
     ]
+    entries = {item.label: item for item in _expected_videos(tmp_path)}
+    assert entries["gta_iv_gameplay_ep003"].path.suffix == ".mp4"
+    assert entries["gta_iv_gameplay_ep004"].path.suffix == ".mkv"
     assert "gta_v_gameplay_ep005" in labels
     assert "gta_vi_official_trailer_1" in labels
     assert "gta_vi_official_extended_look" in labels
@@ -103,6 +108,37 @@ async def test_preflight_reports_missing_pair_and_expected_count(
     assert "missing_sidecar" in codes
     assert "static_count_mismatch" in codes
     assert not report.ok
+
+
+async def test_selective_preflight_excludes_only_declared_004_derivatives(
+    monkeypatch, tmp_path: Path
+) -> None:
+    for game in ("gta_iv", "gta_v", "gta_vi"):
+        (tmp_path / game).mkdir()
+    for entry in _expected_videos(tmp_path):
+        entry.path.write_bytes(b"video")
+        entry.sidecar_path.write_text("[00:00–00:12] Synthetic observation.\n")
+    for stem in ("004", "004_A", "004_B", "004_C"):
+        (tmp_path / "gta_iv" / f"{stem}.mp4").write_bytes(b"derivative")
+    monkeypatch.setattr("app.services.gta_corpus.FFprobe", FakeProbe)
+    report = await preflight_gta_corpus(
+        tmp_path,
+        only="temporal",
+        labels=frozenset({"gta_iv_gameplay_ep003", "gta_iv_gameplay_ep004"}),
+    )
+    assert report.ok
+    assert len(report.videos) == 2
+    assert report.excluded_noncanonical_temporal == [
+        f"gta_iv/{stem}.mp4" for stem in ("004", "004_A", "004_B", "004_C")
+    ]
+    (tmp_path / "gta_iv" / "unexpected.mp4").write_bytes(b"unknown")
+    failed = await preflight_gta_corpus(
+        tmp_path,
+        only="temporal",
+        labels=frozenset({"gta_iv_gameplay_ep003"}),
+    )
+    assert not failed.ok
+    assert "unexpected_temporal_file" in {issue.code for issue in failed.issues}
 
 
 async def test_preflight_reports_duplicate_sha_and_cross_provenance_conflict(

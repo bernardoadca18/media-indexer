@@ -24,8 +24,11 @@ MIME_BY_SUFFIX = {
     ".png": "image/png",
     ".webp": "image/webp",
 }
-EXPECTED_TEMPORAL_COUNT = 20
+EXPECTED_TEMPORAL_COUNT = 22
 EXPECTED_STATIC_COUNT = 133
+NONCANONICAL_TEMPORAL_DERIVATIVES = frozenset(
+    {"gta_iv/004.mp4", "gta_iv/004_A.mp4", "gta_iv/004_B.mp4", "gta_iv/004_C.mp4"}
+)
 
 _GTA_VI_LABELS = {
     "GTAVI_Trailer_1": "gta_vi_official_trailer_1",
@@ -94,6 +97,7 @@ class CorpusPreflightReport:
     images: list[ImageCorpusEntry]
     issues: list[CorpusIssue]
     excluded_noncanonical_artworks: int = 0
+    excluded_noncanonical_temporal: list[str] = field(default_factory=list)
 
     @property
     def error_count(self) -> int:
@@ -126,6 +130,7 @@ class CorpusPreflightReport:
                 "images": len(self.images),
                 "semantic_descriptions": sum(bool(item.sidecar_sha256) for item in self.images),
                 "excluded_noncanonical_artworks": self.excluded_noncanonical_artworks,
+                "excluded_noncanonical_temporal": self.excluded_noncanonical_temporal,
                 "errors": self.error_count,
                 "warnings": self.warning_count,
             },
@@ -152,8 +157,8 @@ def _relative(root: Path, path: Path) -> str:
 
 def _expected_videos(root: Path) -> list[VideoCorpusEntry]:
     entries: list[VideoCorpusEntry] = []
-    for episode in ("000", "001", "002"):
-        path = root / "gta_iv" / f"{episode}.mkv"
+    for episode, extension in (("000", ".mkv"), ("001", ".mkv"), ("002", ".mkv"), ("003", ".mp4"), ("004", ".mkv")):
+        path = root / "gta_iv" / f"{episode}{extension}"
         entries.append(
             VideoCorpusEntry(
                 "gta_iv", f"gta_iv_gameplay_ep{episode}", path, path.with_suffix(".md")
@@ -475,6 +480,7 @@ async def preflight_gta_corpus(
     *,
     only: CorpusOnly = "all",
     smoke: SmokeMode | None = None,
+    labels: frozenset[str] | None = None,
     concurrency: int = 1,
     ffprobe_binary: str | None = None,
 ) -> CorpusPreflightReport:
@@ -517,14 +523,22 @@ async def preflight_gta_corpus(
         for path in (root / game_dir).glob("*")
         if path.is_file() and path.suffix.casefold() in {".mkv", ".mp4", ".md"}
     }
+    excluded_temporal = sorted(
+        _relative(root, path)
+        for path in actual_temporal_paths
+        if _relative(root, path) in NONCANONICAL_TEMPORAL_DERIVATIVES
+    )
+    canonical_temporal_paths = {
+        path for path in actual_temporal_paths if _relative(root, path) not in NONCANONICAL_TEMPORAL_DERIVATIVES
+    }
     if only in {"all", "temporal"}:
-        for unexpected in sorted(actual_temporal_paths - expected_temporal_paths):
+        for unexpected in sorted(canonical_temporal_paths - expected_temporal_paths):
             issues.append(
                 CorpusIssue(
                     "error",
                     "unexpected_temporal_file",
                     _relative(root, unexpected),
-                    "file is outside the canonical 20 video/timeline manifest",
+                    "file is outside the canonical 22 video/timeline manifest",
                 )
             )
     images: list[ImageCorpusEntry]
@@ -537,10 +551,10 @@ async def preflight_gta_corpus(
         videos, images = _select_smoke(videos, images, smoke)
     else:
         actual_video_count = sum(
-            path.suffix.casefold() in {".mkv", ".mp4"} for path in actual_temporal_paths
+            path.suffix.casefold() in {".mkv", ".mp4"} for path in canonical_temporal_paths
         )
         actual_timeline_count = sum(
-            path.suffix.casefold() == ".md" for path in actual_temporal_paths
+            path.suffix.casefold() == ".md" for path in canonical_temporal_paths
         )
         if only in {"all", "temporal"} and (
             actual_video_count != EXPECTED_TEMPORAL_COUNT
@@ -551,7 +565,7 @@ async def preflight_gta_corpus(
                     "error",
                     "temporal_count_mismatch",
                     ".",
-                    f"expected 20 videos and 20 timelines, found {actual_video_count} and {actual_timeline_count}",
+                    f"expected 22 videos and 22 timelines, found {actual_video_count} and {actual_timeline_count}",
                 )
             )
         if only in {"all", "static"} and len(images) != EXPECTED_STATIC_COUNT:
@@ -567,6 +581,12 @@ async def preflight_gta_corpus(
         images = []
     elif only == "static":
         videos = []
+    if labels is not None:
+        available = {entry.label for entry in videos}
+        if not labels or labels - available:
+            raise ValueError(f"unknown canonical labels: {sorted(labels - available)}")
+        videos = [entry for entry in videos if entry.label in labels]
+        images = []
 
     semaphore = asyncio.Semaphore(concurrency)
     probe = FFprobe(ffprobe_binary or settings.ffprobe_binary)
@@ -604,7 +624,7 @@ async def preflight_gta_corpus(
                 )
             )
 
-    return CorpusPreflightReport(root, videos, images, issues, excluded)
+    return CorpusPreflightReport(root, videos, images, issues, excluded, excluded_temporal)
 
 
 def render_preflight_report(report: CorpusPreflightReport) -> str:
@@ -621,6 +641,7 @@ def render_preflight_report(report: CorpusPreflightReport) -> str:
         f"Static: {len(report.images)} images / {sum(bool(item.sidecar_sha256) for item in report.images)} descriptions",
         f"Unique static SHA: {len(set(image_shas))} Duplicate identical files: {duplicate_sha_count} Cross-provenance conflicts: {cross_provenance_conflicts}",
         f"Excluded noncanonical artwork variants: {report.excluded_noncanonical_artworks}",
+        f"Excluded noncanonical temporal derivatives: {', '.join(report.excluded_noncanonical_temporal) or 'none'}",
         f"Errors: {report.error_count} Warnings: {report.warning_count}",
     ]
     for video in report.videos:

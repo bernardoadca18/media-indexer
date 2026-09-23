@@ -5,9 +5,13 @@ GTA IV/V/VI corpus. It never creates a MediaProject: every mutating run requires
 project UUID supplied with `--project-id`.
 
 The preflight is read-only. It scans only `gta_iv`, `gta_v`, and `gta_vi`, requires the canonical
-20 video/timeline pairs and 133 image/description pairs, runs FFprobe/Pillow validation, computes
+22 video/timeline pairs and 133 image/description pairs, runs FFprobe/Pillow validation, computes
 SHA-256, parses explicit ranges, and reports overlaps and suspicious coverage. Non-landscape
 artwork variants are counted as intentionally excluded rather than ingested.
+GTA IV episodes 000–002 use `.mkv`, episode 003 uses `003.mp4`, and episode 004 uses
+`004.mkv`. The explicit noncanonical derivatives `004.mp4`, `004_A.mp4`, `004_B.mp4`, and
+`004_C.mp4` appear in the report but do not count or ingest. Other unexpected video files
+still block preflight.
 
 Range validation uses the same 1 ms end-of-media tolerance as the canonical structured timeline
 importer. This covers numeric serialization noise without accepting a semantically out-of-bounds
@@ -40,6 +44,13 @@ PYTHONPATH=. .venv/bin/python scripts/gta_corpus_operator.py \
   --corpus-root "$GTA_CORPUS_ROOT" \
   --dry-run \
   --json-report /tmp/gta-corpus-preflight.json
+
+PYTHONPATH=. .venv/bin/python scripts/gta_corpus_operator.py \
+  --project-id "$GTA_PROJECT_ID" \
+  --corpus-root "$GTA_CORPUS_ROOT" \
+  --only temporal \
+  --labels gta_iv_gameplay_ep003,gta_iv_gameplay_ep004 \
+  --wait
 
 PYTHONPATH=. .venv/bin/python scripts/gta_corpus_operator.py \
   --project-id "$GTA_PROJECT_ID" \

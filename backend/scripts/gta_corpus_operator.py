@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--only", choices=("all", "temporal", "static"), default="all")
     parser.add_argument("--smoke", choices=("initial", "trailer1"))
+    parser.add_argument("--labels", help="Comma-separated canonical video labels to ingest")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--wait-timeout-seconds", type=float, default=7200.0)
@@ -178,7 +179,10 @@ async def ingest_temporal_entry(
     print(
         f"TEMPORAL label={entry.label} session_id={session_id} "
         f"media_id={ingested['session']['media_id']} "
+        f"transcription_id={transcription['transcription']['id']} "
+        f"visual_index_id={visual['visual_index']['id']} "
         f"temporal_index_id={temporal['temporal_index']['id']} status={temporal_status}"
+        f" sha256={entry.sha256}"
     )
     return temporal_status, reused
 
@@ -263,7 +267,7 @@ async def execute_batch(
         try:
             status, reused = await task
         except Exception as exc:
-            print(f"FAILED: {exc}")
+            print(f"FAILED: {type(exc).__name__}: {exc!r}")
             _record(counts, "failed")
         else:
             _record(counts, status, reused=reused)
@@ -275,10 +279,17 @@ async def run(args: argparse.Namespace) -> int:
         raise ValueError("concurrency must be between 1 and 8")
     if args.wait_timeout_seconds <= 0:
         raise ValueError("wait timeout must be positive")
+    labels_arg = getattr(args, "labels", None)
+    labels = (
+        frozenset(label.strip() for label in labels_arg.split(",") if label.strip())
+        if labels_arg
+        else None
+    )
     report = await preflight_gta_corpus(
         args.corpus_root,
         only=args.only,
         smoke=args.smoke,
+        labels=labels,
         concurrency=args.concurrency,
         ffprobe_binary=args.ffprobe_binary,
     )
@@ -298,7 +309,7 @@ async def run(args: argparse.Namespace) -> int:
         print("Dry-run complete: no API request was made.")
         return 0
 
-    timeout = httpx.Timeout(connect=10.0, read=120.0, write=7200.0, pool=120.0)
+    timeout = httpx.Timeout(connect=10.0, read=7200.0, write=7200.0, pool=120.0)
     async with httpx.AsyncClient(base_url=args.api_url.rstrip("/"), timeout=timeout) as client:
         counts = await execute_batch(
             client,

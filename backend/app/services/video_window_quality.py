@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-POLICY_VERSION = "black_window_quality_v1"
+POLICY_VERSION: Literal["black_window_quality_v1"] = "black_window_quality_v1"
 MINIMUM_BLACK_DURATION = 0.50
 INTERNAL_BLACK_MINIMUM = 0.75
 MOSTLY_BLACK_LONGEST = 2.0
@@ -142,7 +142,7 @@ def inspect_video_window(
             ],
             capture_output=True,
             text=True,
-            timeout=25,
+            timeout=min(90.0, max(25.0, duration * 1.5)),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

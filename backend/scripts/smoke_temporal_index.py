@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import asyncio
+from collections.abc import Sequence
 from uuid import uuid4
 
 from sqlalchemy import delete
@@ -45,7 +46,7 @@ class SmokeEmbeddingProvider:
 
     async def embed(
         self,
-        texts,
+        texts: Sequence[str],
         *,
         model: str,
         expected_dimensions: int,
