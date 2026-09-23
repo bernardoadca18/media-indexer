@@ -29,6 +29,22 @@ async def create_project(payload: ProjectCreate, db: DB) -> object:
     return item
 
 
+@router.put("/{project_id}", response_model=ProjectOut)
+async def ensure_project(project_id: UUID, payload: ProjectCreate, db: DB) -> object:
+    """Create-only idempotent logical project identity for external production owners."""
+    from sqlalchemy.dialects.postgresql import insert
+    from app.models import MediaProject
+
+    await db.execute(insert(MediaProject).values(
+        id=project_id, name=payload.name, description=payload.description,
+    ).on_conflict_do_nothing(index_elements=[MediaProject.id]))
+    await db.commit()
+    item = await ProjectRepository(db).get(project_id)
+    if item.name != payload.name or item.description != payload.description:
+        raise HTTPException(409, "Project identity already belongs to different metadata")
+    return item
+
+
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(
     db: DB, offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=100)] = 50
