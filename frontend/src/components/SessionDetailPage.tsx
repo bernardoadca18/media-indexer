@@ -1,38 +1,52 @@
-import { useParams, Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, FileText, Loader, Upload, Clock } from 'lucide-react';
-import { useState, useRef } from 'react';
-import { api } from '../api/client';
-import { TimelineViewer } from './TimelineViewer';
+import { statusLabel } from "./statusLabel";
+import { useParams, Link, useSearchParams } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, FileText, Loader, Upload, Clock } from "lucide-react";
+import { useState, useRef } from "react";
+import { api } from "../api/client";
+import { TimelineViewer } from "./TimelineViewer";
 
 function statusColor(status: string) {
   switch (status) {
-    case 'ready':
-      return 'text-green-400';
-    case 'pending':
-    case 'processing':
-      return 'text-yellow-400';
-    case 'failed':
-      return 'text-red-400';
+    case "ready":
+      return "text-green-400";
+    case "pending":
+    case "processing":
+      return "text-yellow-400";
+    case "failed":
+      return "text-red-400";
     default:
-      return 'text-slate-400';
+      return "text-slate-400";
   }
 }
 
 export function SessionDetailPage() {
-  const { projectId, sessionId } = useParams<{ projectId: string; sessionId: string }>();
+  const { projectId, sessionId } = useParams<{
+    projectId: string;
+    sessionId: string;
+  }>();
+  const [searchParams] = useSearchParams();
+  const startMs = Number(searchParams.get("start_ms"));
+  const endMs = Number(searchParams.get("end_ms"));
+  const hasSearchRange =
+    searchParams.has("start_ms") &&
+    searchParams.has("end_ms") &&
+    Number.isFinite(startMs) &&
+    Number.isFinite(endMs) &&
+    startMs >= 0 &&
+    endMs > startMs;
   const queryClient = useQueryClient();
   const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: sessions, isLoading: loadingSession } = useQuery({
-    queryKey: ['sessions', projectId],
+    queryKey: ["sessions", projectId],
     queryFn: () => api.listSessions(projectId!),
     enabled: !!projectId,
   });
 
   const { data: fullSession, isLoading: loadingFullSession } = useQuery({
-    queryKey: ['fullSession', sessionId],
+    queryKey: ["fullSession", sessionId],
     queryFn: () => api.getSession(sessionId!),
     enabled: !!sessionId,
   });
@@ -40,24 +54,39 @@ export function SessionDetailPage() {
   const currentSession = sessions?.find((s) => s.id === sessionId);
 
   const { data: job, isLoading: loadingJob } = useQuery({
-    queryKey: ['job', projectId, sessionId],
+    queryKey: ["job", projectId, sessionId],
     queryFn: () => api.getJob(projectId!, sessionId!),
     enabled: !!projectId && !!sessionId,
   });
 
   const { data: temporalIndexes } = useQuery({
-    queryKey: ['temporal-indexes', sessionId],
+    queryKey: ["temporal-indexes", sessionId],
     queryFn: () => api.listTemporalIndexes(sessionId!),
-    enabled: !!sessionId && currentSession?.status === 'ready',
+    enabled: !!sessionId && currentSession?.status === "ready",
   });
 
-  const completedTemporalIndex = temporalIndexes?.find(ti => ti.status === 'completed');
+  const requestedIndexId = searchParams.get("temporal_index_id");
+  const completedTemporalIndex = temporalIndexes?.find(
+    (ti) =>
+      ti.status === "completed" &&
+      (!requestedIndexId || ti.id === requestedIndexId),
+  );
 
   const { data: timeline, isLoading: loadingTimeline } = useQuery({
-    queryKey: ['semantic-timeline', sessionId, completedTemporalIndex?.id],
-    queryFn: () => api.getSemanticTimeline(sessionId!, {
-      temporal_index_id: completedTemporalIndex!.id,
-    }),
+    queryKey: [
+      "semantic-timeline",
+      sessionId,
+      completedTemporalIndex?.id,
+      hasSearchRange ? startMs : null,
+      hasSearchRange ? endMs : null,
+    ],
+    queryFn: () =>
+      api.getSemanticTimeline(sessionId!, {
+        temporal_index_id: completedTemporalIndex!.id,
+        ...(hasSearchRange
+          ? { start_seconds: startMs / 1000, end_seconds: endMs / 1000 }
+          : {}),
+      }),
     enabled: !!sessionId && !!completedTemporalIndex,
   });
 
@@ -66,11 +95,11 @@ export function SessionDetailPage() {
       return api.importNotes(projectId!, sessionId!, file);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      queryClient.invalidateQueries({ queryKey: ["sessions", projectId] });
       setImportError(null);
     },
     onError: (err) => {
-      setImportError(err instanceof Error ? err.message : 'Import failed');
+      setImportError(err instanceof Error ? err.message : "Import failed");
     },
   });
 
@@ -91,7 +120,9 @@ export function SessionDetailPage() {
 
   if (!currentSession) {
     return (
-      <div className="text-center py-20 text-red-400">Session not found</div>
+      <div className="text-center py-20 text-red-400">
+        Sessão não encontrada
+      </div>
     );
   }
 
@@ -102,9 +133,22 @@ export function SessionDetailPage() {
         className="inline-flex items-center gap-2 text-slate-400 hover:text-slate-200 mb-6"
       >
         <ArrowLeft className="w-4 h-4" />
-        Back to project
+        Voltar ao projeto
       </Link>
 
+      {hasSearchRange && (
+        <p className="library-description">
+          Resultado da busca · intervalo de{" "}
+          {(startMs / 1000).toLocaleString("pt-BR")} s a{" "}
+          {(endMs / 1000).toLocaleString("pt-BR")} s.{" "}
+          <Link
+            className="text-blue-400"
+            to={`/projects/${projectId}/sessions/${sessionId}`}
+          >
+            Ver sessão completa →
+          </Link>
+        </p>
+      )}
       <div className="grid gap-6 md:grid-cols-2">
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-bold mb-4">{currentSession.label}</h2>
@@ -112,20 +156,22 @@ export function SessionDetailPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-slate-500">Status</span>
-              <span className={`font-medium ${statusColor(currentSession.status)}`}>
-                {currentSession.status}
+              <span
+                className={`font-medium ${statusColor(currentSession.status)}`}
+              >
+                {statusLabel(currentSession.status)}
               </span>
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-500">Created</span>
+              <span className="text-slate-500">Criada em</span>
               <span className="text-slate-400">
                 {new Date(currentSession.created_at).toLocaleString()}
               </span>
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-500">Notes</span>
+              <span className="text-slate-500">Notas</span>
               {currentSession.notes_filename ? (
                 <span className="flex items-center gap-1 text-slate-400">
                   <FileText className="w-4 h-4" />
@@ -137,7 +183,7 @@ export function SessionDetailPage() {
                   className="flex items-center gap-1 text-blue-400 hover:text-blue-300"
                 >
                   <Upload className="w-4 h-4" />
-                  Import notes
+                  Importar notas
                 </button>
               )}
             </div>
@@ -159,7 +205,7 @@ export function SessionDetailPage() {
             {importMutation.isPending && (
               <div className="flex items-center gap-2 text-yellow-400">
                 <Loader className="w-4 h-4 animate-spin" />
-                Importing notes...
+                Importando notas…
               </div>
             )}
           </div>
@@ -167,21 +213,21 @@ export function SessionDetailPage() {
 
         {job && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-            <h3 className="text-lg font-semibold mb-4">Processing Job</h3>
+            <h3 className="text-lg font-semibold mb-4">Processamento</h3>
 
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-slate-500">Type</span>
+                <span className="text-slate-500">Tipo</span>
                 <span className="text-slate-400">{job.job_type}</span>
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-slate-500">Stage</span>
+                <span className="text-slate-500">Etapa</span>
                 <span className="text-slate-400">{job.stage}</span>
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-slate-500">Progress</span>
+                <span className="text-slate-500">Progresso</span>
                 <div className="flex items-center gap-2">
                   <div className="w-24 h-2 bg-slate-700 rounded-full overflow-hidden">
                     <div
@@ -196,7 +242,7 @@ export function SessionDetailPage() {
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-slate-500">Attempts</span>
+                <span className="text-slate-500">Tentativas</span>
                 <span className="text-slate-400">
                   {job.attempts} / {job.max_attempts}
                 </span>
@@ -213,7 +259,7 @@ export function SessionDetailPage() {
       </div>
 
       <div className="mt-6">
-        <h2 className="text-lg font-semibold text-slate-200 mb-4">Notes</h2>
+        <h2 className="text-lg font-semibold text-slate-200 mb-4">Notas</h2>
         {fullSession && fullSession.notes && fullSession.notes.length > 0 ? (
           <div className="space-y-3">
             {fullSession.notes.map((note) => (
@@ -221,15 +267,22 @@ export function SessionDetailPage() {
                 key={note.id}
                 className="p-3 bg-slate-800 rounded-lg border border-slate-700"
               >
-                <div className="text-xs text-slate-500 mb-1">Note #{note.order}</div>
+                <div className="text-xs text-slate-500 mb-1">
+                  Nota #{note.order}
+                </div>
                 <p className="text-sm text-slate-300">{note.raw}</p>
                 {note.description && (
-                  <p className="text-xs text-slate-400 mt-1">{note.description}</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {note.description}
+                  </p>
                 )}
                 {note.tags && note.tags.length > 0 && (
                   <div className="flex gap-1 mt-2 flex-wrap">
                     {note.tags.map((tag: string, i: number) => (
-                      <span key={i} className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-400">
+                      <span
+                        key={i}
+                        className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-400"
+                      >
                         {tag}
                       </span>
                     ))}
@@ -246,21 +299,27 @@ export function SessionDetailPage() {
           </div>
         ) : (
           <div className="p-4 bg-slate-800/50 rounded-lg border border-dashed border-slate-700">
-            <p className="text-sm text-slate-500">No notes imported for this session.</p>
+            <p className="text-sm text-slate-500">
+              Sem notas imported for this session.
+            </p>
           </div>
         )}
       </div>
 
-      {fullSession?.status === 'ready' && (
+      {fullSession?.status === "ready" && (
         <div className="mt-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-slate-200 flex items-center gap-2">
               <Clock className="w-5 h-5" />
-              Semantic Timeline
+              Timeline semântica
             </h2>
             {temporalIndexes && temporalIndexes.length > 0 && (
               <span className="text-xs text-slate-500">
-                {temporalIndexes.filter(ti => ti.status === 'completed').length} completed indexes
+                {
+                  temporalIndexes.filter((ti) => ti.status === "completed")
+                    .length
+                }{" "}
+                índices concluídos
               </span>
             )}
           </div>
@@ -271,14 +330,23 @@ export function SessionDetailPage() {
             </div>
           ) : temporalIndexes && temporalIndexes.length === 0 ? (
             <div className="p-4 bg-slate-800/50 rounded-lg border border-dashed border-slate-700">
-              <p className="text-sm text-slate-500">No temporal indexes available. Create one from the processed transcription and visual index.</p>
+              <p className="text-sm text-slate-500">
+                Nenhum índice temporal disponível. A timeline aparecerá quando a
+                transcrição e o índice visual forem processados.
+              </p>
             </div>
           ) : !completedTemporalIndex ? (
             <div className="p-4 bg-slate-800/50 rounded-lg border border-yellow-500/50">
-              <p className="text-sm text-slate-400">Temporal index processing in progress...</p>
+              <p className="text-sm text-slate-400">
+                {requestedIndexId
+                  ? "O índice deste resultado não está disponível. Volte à busca para consultar resultados atuais."
+                  : "Índice temporal em processamento…"}
+              </p>
             </div>
           ) : timeline ? (
-            <TimelineViewer timeline={timeline} />
+            <div id="timeline" tabIndex={-1}>
+              <TimelineViewer timeline={timeline} />
+            </div>
           ) : null}
         </div>
       )}

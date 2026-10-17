@@ -1,30 +1,39 @@
-import { useParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Video, FileText, Clock, CheckCircle, XCircle, Loader } from 'lucide-react';
-import { api } from '../api/client';
+import { statusLabel } from "./statusLabel";
+import { useParams, Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  Video,
+  FileText,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Loader,
+} from "lucide-react";
+import { api } from "../api/client";
 
 function statusColor(status: string) {
   switch (status) {
-    case 'ready':
-      return 'text-green-400';
-    case 'pending':
-    case 'processing':
-      return 'text-yellow-400';
-    case 'failed':
-      return 'text-red-400';
+    case "ready":
+      return "text-green-400";
+    case "pending":
+    case "processing":
+      return "text-yellow-400";
+    case "failed":
+      return "text-red-400";
     default:
-      return 'text-slate-400';
+      return "text-slate-400";
   }
 }
 
 function statusIcon(status: string) {
   switch (status) {
-    case 'ready':
+    case "ready":
       return <CheckCircle className="w-4 h-4 text-green-400" />;
-    case 'pending':
-    case 'processing':
+    case "pending":
+    case "processing":
       return <Loader className="w-4 h-4 text-yellow-400 animate-spin" />;
-    case 'failed':
+    case "failed":
       return <XCircle className="w-4 h-4 text-red-400" />;
     default:
       return <Clock className="w-4 h-4 text-slate-400" />;
@@ -35,13 +44,13 @@ export function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>();
 
   const { data: project, isLoading: loadingProject } = useQuery({
-    queryKey: ['project', projectId],
+    queryKey: ["project", projectId],
     queryFn: () => api.getProject(projectId!),
     enabled: !!projectId,
   });
 
   const { data: sessions, isLoading: loadingSessions } = useQuery({
-    queryKey: ['sessions', projectId],
+    queryKey: ["sessions", projectId],
     queryFn: () => api.listSessions(projectId!),
     enabled: !!projectId,
   });
@@ -56,7 +65,9 @@ export function ProjectDetailPage() {
 
   if (!project) {
     return (
-      <div className="text-center py-20 text-red-400">Project not found</div>
+      <div className="text-center py-20 text-red-400">
+        Projeto não encontrado
+      </div>
     );
   }
 
@@ -67,7 +78,7 @@ export function ProjectDetailPage() {
         className="inline-flex items-center gap-2 text-slate-400 hover:text-slate-200 mb-6"
       >
         <ArrowLeft className="w-4 h-4" />
-        Back to projects
+        Voltar aos projetos
       </Link>
 
       <div className="mb-8">
@@ -78,18 +89,20 @@ export function ProjectDetailPage() {
       </div>
 
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">Sessions</h3>
+        <h3 className="text-lg font-semibold">Sessões</h3>
         <Link
           to={`/ingest?project=${projectId}`}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
         >
           <Video className="w-4 h-4" />
-          Ingest Media
+          Importar mídia
         </Link>
       </div>
 
       {loadingSessions ? (
-        <div className="text-center py-10 text-slate-500">Loading sessions...</div>
+        <div className="text-center py-10 text-slate-500">
+          Carregando sessões…
+        </div>
       ) : sessions && sessions.length > 0 ? (
         <div className="space-y-3">
           {sessions.map((session) => (
@@ -109,13 +122,15 @@ export function ProjectDetailPage() {
                         {session.notes_filename}
                       </span>
                     ) : (
-                      <span className="text-slate-600">No notes</span>
+                      <span className="text-slate-600">Sem notas</span>
                     )}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-4 text-sm text-slate-500">
-                <span className={statusColor(session.status)}>{session.status}</span>
+                <span className={statusColor(session.status)}>
+                  {statusLabel(session.status)}
+                </span>
                 <span>{new Date(session.created_at).toLocaleDateString()}</span>
               </div>
             </Link>
@@ -123,7 +138,7 @@ export function ProjectDetailPage() {
         </div>
       ) : (
         <div className="text-center py-10 text-slate-500">
-          No sessions yet. Ingest your first media to get started.
+          Nenhuma sessão ainda. Importe uma mídia para começar.
         </div>
       )}
     </div>
